@@ -23,7 +23,7 @@ import tools
 
 from utils import distributed_utils
 from utils.com_paras_flops import FLOPs_and_Params
-from utils.augmentations import SSDAugmentation, ColorAugmentation
+from utils.augmentations import SSDAugmentation, ColorAugmentation, SSDAugmentationTest
 from utils.cocoapi_evaluator import COCOAPIEvaluator
 from utils.vocapi_evaluator import VOCAPIEvaluator
 from utils.modules import ModelEMA
@@ -227,12 +227,12 @@ def train():
 
 
     dataset_positive_train = FileDetection(files=train_files_p, labels=train_labels_p, transform=SSDAugmentation(train_size))
-    dataset_positive_val = FileDetection(files=val_files_p, labels=val_labels_p, transform=SSDAugmentation(train_size))
+    dataset_positive_val = FileDetection(files=val_files_p, labels=val_labels_p, transform=SSDAugmentationTest(train_size))
 
-    dataset_nhs_val = FileDetection(files=test_files_nhs, labels=None, transform=SSDAugmentation(train_size))
+    dataset_nhs_val = FileDetection(files=test_files_nhs, labels=None, transform=SSDAugmentationTest(train_size))
 
     dataset_negative_train = FileDetection(files=train_files_n, labels=None, transform=SSDAugmentation(train_size))
-    dataset_negative_val = FileDetection(files=val_files_n, labels=None, transform=SSDAugmentation(train_size))
+    dataset_negative_val = FileDetection(files=val_files_n, labels=None, transform=SSDAugmentationTest(train_size))
 
     evaluator = None
 
