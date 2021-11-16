@@ -227,12 +227,12 @@ def train():
 
 
     dataset_positive_train = FileDetection(files=train_files_p, labels=train_labels_p, transform=SSDAugmentation(train_size))
-    dataset_positive_val = FileDetection(files=val_files_p, labels=val_labels_p, transform=SSDAugmentationTest(train_size))
+    dataset_positive_val = FileDetection(files=val_files_p, labels=val_labels_p, transform=BaseTransform(val_size))
 
-    dataset_nhs_val = FileDetection(files=test_files_nhs, labels=None, transform=SSDAugmentationTest(train_size))
+    dataset_nhs_val = FileDetection(files=test_files_nhs, labels=None, transform=BaseTransform(val_size))
 
     dataset_negative_train = FileDetection(files=train_files_n, labels=None, transform=SSDAugmentation(train_size))
-    dataset_negative_val = FileDetection(files=val_files_n, labels=None, transform=SSDAugmentationTest(train_size))
+    dataset_negative_val = FileDetection(files=val_files_n, labels=None, transform=BaseTransform(val_size))
 
     evaluator = None
 
@@ -457,7 +457,7 @@ def train():
 
         # set eval mode
         model_eval.trainable = False
-        #model_eval.set_grid(val_size)
+        model_eval.set_grid(val_size)
         model_eval.eval()
         filename = 0
 
