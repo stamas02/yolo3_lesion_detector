@@ -1,6 +1,8 @@
 import cv2
 import numpy as np
 from numpy import random
+from torchvision.transforms import functional as F
+from torchvision import transforms
 
 
 def intersect(box_a, box_b):
@@ -22,10 +24,10 @@ def jaccard_numpy(box_a, box_b):
         jaccard overlap: Shape: [box_a.shape[0], box_a.shape[1]]
     """
     inter = intersect(box_a, box_b)
-    area_a = ((box_a[:, 2]-box_a[:, 0]) *
-              (box_a[:, 3]-box_a[:, 1]))  # [A,B]
-    area_b = ((box_b[2]-box_b[0]) *
-              (box_b[3]-box_b[1]))  # [A,B]
+    area_a = ((box_a[:, 2] - box_a[:, 0]) *
+              (box_a[:, 3] - box_a[:, 1]))  # [A,B]
+    area_b = ((box_b[2] - box_b[0]) *
+              (box_b[3] - box_b[1]))  # [A,B]
     union = area_a + area_b - inter
     return inter / union  # [A,B]
 
@@ -197,6 +199,7 @@ class RandomSampleCrop(object):
             boxes (Tensor): the adjusted bounding boxes in pt form
             labels (Tensor): the class labels for each bbox
     """
+
     def __init__(self):
         self.sample_options = (
             # using entire original input image
@@ -239,7 +242,7 @@ class RandomSampleCrop(object):
                 top = random.uniform(height - h)
 
                 # convert to integer rect x1,y1,x2,y2
-                rect = np.array([int(left), int(top), int(left+w), int(top+h)])
+                rect = np.array([int(left), int(top), int(left + w), int(top + h)])
 
                 # calculate IoU (jaccard overlap) b/t the cropped and gt boxes
                 overlap = jaccard_numpy(boxes, rect)
@@ -250,7 +253,7 @@ class RandomSampleCrop(object):
 
                 # cut the crop from the image
                 current_image = current_image[rect[1]:rect[3], rect[0]:rect[2],
-                                              :]
+                                :]
 
                 # keep overlap with gt box IF center in sampled patch
                 centers = (boxes[:, :2] + boxes[:, 2:]) / 2.0
@@ -298,15 +301,15 @@ class Expand(object):
 
         height, width, depth = image.shape
         ratio = random.uniform(1, 4)
-        left = random.uniform(0, width*ratio - width)
-        top = random.uniform(0, height*ratio - height)
+        left = random.uniform(0, width * ratio - width)
+        top = random.uniform(0, height * ratio - height)
 
         expand_image = np.zeros(
-            (int(height*ratio), int(width*ratio), depth),
+            (int(height * ratio), int(width * ratio), depth),
             dtype=image.dtype)
         expand_image[:, :, :] = self.mean
         expand_image[int(top):int(top + height),
-                     int(left):int(left + width)] = image
+        int(left):int(left + width)] = image
         image = expand_image
 
         boxes = boxes.copy()
@@ -380,7 +383,7 @@ class PhotometricDistort(object):
 class SSDAugmentation(object):
     def __init__(self, size=416, mean=(0.406, 0.456, 0.485), std=(0.225, 0.224, 0.229)):
         self.mean = mean
-        self.mean_255 = (mean[0]*255, mean[1]*255, mean[2]*255)
+        self.mean_255 = (mean[0] * 255, mean[1] * 255, mean[2] * 255)
         self.size = size
         self.std = std
         self.augment = Compose([
@@ -396,12 +399,57 @@ class SSDAugmentation(object):
         ])
 
     def __call__(self, img, boxes, labels):
+        c_y = img.shape[0] // 2
+        c_x = img.shape[1] // 2
+        new_size = min(img.shape[0], img.shape[1])
+        x_min = c_x - (new_size // 2)
+        x_max = c_x + (new_size // 2)
+        y_min = c_y - (new_size // 2)
+        y_max = c_y + (new_size // 2)
+        img = img[y_min:y_max, x_min:x_max]
+
+        # img = F.center_crop(img, (new_size,new_size))
         return self.augment(img, boxes, labels)
+
+
+class SDAugmentation(object):
+    def __init__(self, size=416, mean=(0.406, 0.456, 0.485), std=(0.225, 0.224, 0.229)):
+        self.mean = mean
+        self.mean_255 = (mean[0] * 255, mean[1] * 255, mean[2] * 255)
+        self.size = size
+        self.std = std
+        self.pre_trans = transforms.RandomResizedCrop(self.size, scale=(0.2, 1.0)),
+        self.augment = Compose([
+            ConvertFromInts(),
+            ToAbsoluteCoords(),
+            PhotometricDistort(),
+            Expand(self.mean_255),
+            RandomSampleCrop(),
+            RandomMirror(),
+            ToPercentCoords(),
+            Resize(self.size),
+            Normalize(self.mean, self.std)
+        ])
+
+    def __call__(self, img, boxes, labels):
+        w = img.shape[1]
+        h = img.shape[0]
+        min_scale = 0.1
+        max_scale = 1.0
+        r_scale = (max_scale - min_scale) * np.random.random() + min_scale
+        new_size = int(r_scale * min(img.shape[0], img.shape[1]))
+        x_min = int(((w - new_size)//2) * np.random.random())
+        y_min = int(((h - new_size)//2) * np.random.random())
+
+        img = img[y_min:y_min + new_size, x_min:x_min + new_size]
+
+        return self.augment(img, boxes, labels)
+
 
 class SSDAugmentationTest(object):
     def __init__(self, size=416, mean=(0.406, 0.456, 0.485), std=(0.225, 0.224, 0.229)):
         self.mean = mean
-        self.mean_255 = (mean[0]*255, mean[1]*255, mean[2]*255)
+        self.mean_255 = (mean[0] * 255, mean[1] * 255, mean[2] * 255)
         self.size = size
         self.std = std
         self.augment = Compose([
@@ -414,6 +462,7 @@ class SSDAugmentationTest(object):
 
     def __call__(self, img, boxes, labels):
         return self.augment(img, boxes, labels)
+
 
 class ColorAugmentation(object):
     def __init__(self, size=416, mean=(0.406, 0.456, 0.485), std=(0.225, 0.224, 0.229)):

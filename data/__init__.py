@@ -4,7 +4,7 @@ from .config import *
 import torch
 import cv2
 import numpy as np
-
+from torchvision.transforms import functional as F
 
 def detection_collate(batch):
     """Custom collate fn for dealing with batches of images that have a different
@@ -42,4 +42,12 @@ class BaseTransform:
         self.std = np.array(std, dtype=np.float32)
 
     def __call__(self, image, boxes=None, labels=None):
+        c_y = image.shape[0] // 2
+        c_x = image.shape[1] // 2
+        new_size = min(image.shape[0], image.shape[1])
+        x_min = c_x-(new_size//2)
+        x_max = c_x + (new_size // 2)
+        y_min = c_y-(new_size//2)
+        y_max = c_y + (new_size // 2)
+        image = image[y_min:y_max,x_min:x_max]
         return base_transform(image, self.size, self.mean, self.std), boxes, labels
