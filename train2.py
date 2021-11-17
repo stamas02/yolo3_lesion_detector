@@ -227,7 +227,7 @@ def train():
 
 
     dataset_positive_train = FileDetection(files=train_files_p, labels=train_labels_p, transform=SSDAugmentation(train_size))
-    dataset_positive_val = FileDetection(files=val_files_p, labels=val_labels_p, transform=BaseTransform(val_size))
+    dataset_positive_val = FileDetection(files=val_files_p, labels=val_labels_p, transform=SSDAugmentation(val_size))
 
     dataset_nhs_val = FileDetection(files=test_files_nhs, labels=None, transform=BaseTransform(val_size))
 
@@ -238,7 +238,7 @@ def train():
 
 
     # build model
-    anchor_size = cfg['anchor_size_voc'] if args.dataset == 'voc' else cfg['anchor_size_coco']
+    anchor_size = cfg['anchor_size_skin']
     net = yolo_net(device=device, 
                    input_size=train_size, 
                    num_classes=num_classes, 
