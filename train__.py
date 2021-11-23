@@ -15,23 +15,17 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 
 from data.voc0712 import VOCDetection
 from data.coco2017 import COCODataset
-from data.custom import FileDetection
 from data import config
 from data import BaseTransform, detection_collate
-from PIL import Image, ImageDraw
+
 import tools
 
 from utils import distributed_utils
 from utils.com_paras_flops import FLOPs_and_Params
-from utils.augmentations import SSDAugmentation, SDAugmentation, ColorAugmentation, SSDAugmentationTest
+from utils.augmentations import SSDAugmentation, ColorAugmentation
 from utils.cocoapi_evaluator import COCOAPIEvaluator
 from utils.vocapi_evaluator import VOCAPIEvaluator
 from utils.modules import ModelEMA
-from torchvision import transforms
-from glob import glob
-import pandas as pd
-
-
 
 
 def parse_args():
@@ -96,53 +90,6 @@ def parse_args():
 
     return parser.parse_args()
 
-def denormalize(img, mean, std):
-    #for ImageNet the mean and std are:
-    #mean = np.asarray([ 0.485, 0.456, 0.406 ])
-    #std = np.asarray([ 0.229, 0.224, 0.225 ])
-
-    denormalize = transforms.Normalize((-1 * mean / std), (1.0 / std))
-
-    res = img.squeeze(0)
-    res = denormalize(res)
-
-    #Image needs to be clipped since the denormalize function will map some
-    #values below 0 and above 1
-    res = torch.clamp(res, 0, 1)
-    return (res)
-
-def get_directory(negative_dir, test_split, val_split):
-    result = [y for x in os.walk(negative_dir) for y in glob(os.path.join(x[0], '*.jpg'))]
-    df = pd.DataFrame({"images": result})
-    train_df, test_df, val_df = slit_data(df, test_split, val_split)
-    return train_df["images"].tolist(), test_df["images"].tolist(), val_df["images"].tolist()
-
-
-def get_isic(isic2019csv, test_split, val_split):
-    df = pd.read_csv(os.path.join(isic2019csv))
-    train_df, test_df, val_df = slit_data(df, test_split, val_split)
-    image_dir = os.path.join(os.path.dirname(isic2019csv), "ISIC_2019_Training_Input")
-    train_files = [os.path.join(image_dir, f + ".jpg") for f in train_df.image]
-    train_labels = np.argmax(train_df.drop(["image", "UNK"], axis=1).to_numpy(), axis=1)
-    val_files = [os.path.join(image_dir, f + ".jpg") for f in val_df.image]
-    val_labels = np.argmax(val_df.drop(["image", "UNK"], axis=1).to_numpy(), axis=1)
-    test_files = [os.path.join(image_dir, f + ".jpg") for f in test_df.image]
-    test_labels = np.argmax(test_df.drop(["image", "UNK"], axis=1).to_numpy(), axis=1)
-    return train_files, train_labels, val_files, val_labels, test_files, test_labels
-
-def slit_data(df, test_split, val_split, seed=7):
-    indices = np.array(range(df.shape[0]))
-    np.random.seed(seed)
-    np.random.shuffle(indices)
-    split_point_1 = int(indices.shape[0] * test_split)
-    split_point_2 = int(indices.shape[0] * (val_split + test_split))
-    test_indices = indices[0:split_point_1]
-    val_indices = indices[split_point_1:split_point_2]
-    train_indices = indices[split_point_2::]
-    train_df = df.take(train_indices)
-    test_df = df.take(test_indices)
-    val_df = df.take(val_indices)
-    return train_df, test_df, val_df
 
 def train():
     args = parse_args()
@@ -219,29 +166,40 @@ def train():
     if args.ema:
         print('use EMA trick ...')
 
-    # dataset and evaluator
+    elif args.dataset == 'voc':
+        data_dir = os.path.join(args.data_root, 'VOCdevkit')
+        num_classes = 20
+        dataset = VOCDetection(data_dir=data_dir, 
+                                transform=SSDAugmentation(train_size))
 
-    data_dir = os.path.join(args.data_root)
-    num_classes = 2
+        evaluator = VOCAPIEvaluator(data_root=data_dir,
+                                    img_size=val_size,
+                                    device=device,
+                                    transform=BaseTransform(val_size))
 
-    train_files_n, val_files_n, test_files_n = get_directory("/media/stamas01/Data/datasets/SD-198/260/SD-260/", 0.03, 0.03)
-    test_files_nhs, _, _ = get_directory("/media/stamas01/Data/datasets/NHS/data/", 0,0)
-    train_files_p, train_labels_p, val_files_p, val_labels_p, test_files_p, test_labels_p = get_isic("/media/stamas01/Data/datasets/ISIC_2019/ISIC_2019_Training_GroundTruth.csv", 0.03, 0.03)
+    elif args.dataset == 'coco':
+        data_dir = os.path.join(args.data_root, 'COCO')
+        num_classes = 80
+        dataset = COCODataset(
+                    data_dir=data_dir,
+                    transform=SSDAugmentation(train_size))
 
-
-    dataset_positive_train = FileDetection(files=train_files_p, labels=train_labels_p, transform=SSDAugmentation(train_size))
-    dataset_positive_val = FileDetection(files=val_files_p, labels=val_labels_p, transform=SSDAugmentation(val_size))
-
-    dataset_nhs_val = FileDetection(files=test_files_nhs, labels=None, transform=BaseTransform(val_size))
-
-    dataset_negative_train = FileDetection(files=train_files_n, labels=None, transform=SDAugmentation(train_size))
-    dataset_negative_val = FileDetection(files=val_files_n, labels=None, transform=BaseTransform(val_size))
-
-    evaluator = None
-
+        evaluator = COCOAPIEvaluator(
+                        data_dir=data_dir,
+                        img_size=val_size,
+                        device=device,
+                        transform=BaseTransform(val_size))
+    
+    else:
+        print('unknow dataset !! Only support voc and coco !!')
+        exit(0)
+    
+    print('Training model on:', dataset.name)
+    print('The dataset size:', len(dataset))
+    print("----------------------------------------------------------")
 
     # build model
-    anchor_size = cfg['anchor_size_skin']
+    anchor_size = cfg['anchor_size_voc'] if args.dataset == 'voc' else cfg['anchor_size_coco']
     net = yolo_net(device=device, 
                    input_size=train_size, 
                    num_classes=num_classes, 
@@ -259,57 +217,36 @@ def train():
     # compute FLOPs and Params
     FLOPs_and_Params(model=model, size=train_size)
 
+    # distributed
+    if args.distributed and args.num_gpu > 1:
+        print('using DDP ...')
+        model = DDP(model, device_ids=[local_rank], output_device=local_rank)
+        # dataloader
+        dataloader = torch.utils.data.DataLoader(
+                        dataset=dataset, 
+                        batch_size=args.batch_size, 
+                        collate_fn=detection_collate,
+                        num_workers=args.num_workers,
+                        pin_memory=True,
+                        sampler=torch.utils.data.distributed.DistributedSampler(dataset)
+                        )
 
-    model = model.train().to(device)
-    # dataloader
+    else:
+        model = model.train().to(device)
+        # dataloader
+        dataloader = torch.utils.data.DataLoader(
+                        dataset=dataset, 
+                        shuffle=True,
+                        batch_size=args.batch_size, 
+                        collate_fn=detection_collate,
+                        num_workers=args.num_workers,
+                        pin_memory=True
+                        )
 
-    dataloader_nhs_val = torch.utils.data.DataLoader(
-                    dataset=dataset_nhs_val,
-                    shuffle=True,
-                    batch_size=args.batch_size,
-                    collate_fn=detection_collate,
-                    num_workers=args.num_workers,
-                    pin_memory=True
-                    )
-    dataloader_positive_train = torch.utils.data.DataLoader(
-                    dataset=dataset_positive_train,
-                    shuffle=True,
-                    batch_size=args.batch_size,
-                    collate_fn=detection_collate,
-                    num_workers=args.num_workers,
-                    pin_memory=True
-                    )
-
-    dataloader_positive_val = torch.utils.data.DataLoader(
-                    dataset=dataset_positive_val,
-                    shuffle=True,
-                    batch_size=args.batch_size,
-                    collate_fn=detection_collate,
-                    num_workers=args.num_workers,
-                    pin_memory=True
-                    )
-
-    dataloader_negative_train = torch.utils.data.DataLoader(
-                    dataset=dataset_negative_train,
-                    shuffle=False,
-                    batch_size=args.batch_size,
-                    collate_fn=detection_collate,
-                    num_workers=args.num_workers,
-                    pin_memory=True
-                    )
-
-
-    dataloader_negative_val = torch.utils.data.DataLoader(
-                    dataset=dataset_negative_val,
-                    shuffle=False,
-                    batch_size=args.batch_size,
-                    collate_fn=detection_collate,
-                    num_workers=args.num_workers,
-                    pin_memory=True
-                    )
-
-
-
+    # keep training
+    if args.resume is not None:
+        print('keep training model: %s' % (args.resume))
+        model.load_state_dict(torch.load(args.resume, map_location=device))
 
     # EMA
     ema = ModelEMA(model) if args.ema else None
@@ -335,35 +272,32 @@ def train():
 
     batch_size = args.batch_size
     max_epoch = cfg['max_epoch']
-    epoch_size = len(dataset_positive_train) // (batch_size * args.num_gpu)
+    epoch_size = len(dataset) // (batch_size * args.num_gpu)
 
     best_map = -100.
 
     t0 = time.time()
     # start training loop
     for epoch in range(args.start_epoch, max_epoch):
+        if args.distributed:
+            dataloader.sampler.set_epoch(epoch)        
 
         # use step lr
         if epoch in cfg['lr_epoch']:
             tmp_lr = tmp_lr * 0.1
             set_lr(optimizer, tmp_lr)
-
-
-        for iter_i, ((images_p, targets_p), (images_n, targets_n)) in enumerate(zip(dataloader_positive_train, dataloader_negative_train)):
+    
+        for iter_i, (images, targets) in enumerate(dataloader):
             # WarmUp strategy for learning rate
-            if iter_i == 100:
-                break
             if epoch < args.wp_epoch:
-                tmp_lr = base_lr * pow((iter_i + epoch * epoch_size) * 1. / (args.wp_epoch * epoch_size), 4)
+                tmp_lr = base_lr * pow((iter_i+epoch*epoch_size)*1. / (args.wp_epoch*epoch_size), 4)
                 set_lr(optimizer, tmp_lr)
 
             elif epoch == args.wp_epoch and iter_i == 0:
                 tmp_lr = base_lr
                 set_lr(optimizer, tmp_lr)
 
-
             # multi-scale trick
-            images = torch.cat([images_p, images_n])
             if iter_i % 10 == 0 and iter_i > 0 and args.multi_scale:
                 # randomly choose a new size
                 r = cfg['random_size_range']
@@ -372,8 +306,7 @@ def train():
             if args.multi_scale:
                 # interpolate
                 images = torch.nn.functional.interpolate(images, size=train_size, mode='bilinear', align_corners=False)
-
-            targets = targets_p+targets_n
+            
             targets = [label.tolist() for label in targets]
             # visualize labels
             if args.vis:
@@ -413,6 +346,8 @@ def train():
             loss_dict_reduced = distributed_utils.reduce_loss_dict(loss_dict)
 
             # check NAN for loss
+            if torch.isnan(total_loss):
+                continue
 
             # backprop
             total_loss.backward()        
@@ -452,63 +387,45 @@ def train():
                 t0 = time.time()
 
         # evaluation
+        if (epoch + 1) % args.eval_epoch == 0:
+            if args.ema:
+                model_eval = ema.ema
+            else:
+                model_eval = model.module if args.distributed else model
 
-        if args.ema:
-            model_eval = ema.ema
-        else:
-            model_eval = model.module if args.distributed else model
+            # set eval mode
+            model_eval.trainable = False
+            model_eval.set_grid(val_size)
+            model_eval.eval()
 
-        # set eval mode
-        model_eval.trainable = False
-        model_eval.set_grid(val_size)
-        model_eval.eval()
-        filename = 0
+            if local_rank == 0:
+                # evaluate
+                evaluator.evaluate(model_eval)
 
-        for iter_i, ((images_p, targets_p), (images_n, targets_n), (images_nhs, targets_nhs)) in enumerate(zip(dataloader_positive_val, dataloader_negative_val, dataloader_nhs_val)):
-            for images, tag in zip([images_p, images_n, images_nhs], ["pos", "neg", "nhs"]):
-                images = images.to(device)
-                bboxes, scores, cls_inds = model_eval(images)
+                cur_map = evaluator.map if args.dataset == 'voc' else evaluator.ap50_95
+                if cur_map > best_map:
+                    # update best-map
+                    best_map = cur_map
+                    # save model
+                    print('Saving state, epoch:', epoch + 1)
+                    torch.save(model_eval.state_dict(), os.path.join(path_to_save, 
+                                args.version + '_' + repr(epoch + 1) + '_' + str(round(best_map, 2)) + '.pth')
+                                )  
+                if args.tfboard:
+                    if args.dataset == 'voc':
+                        tblogger.add_scalar('07test/mAP', evaluator.map, epoch)
+                    elif args.dataset == 'coco':
+                        tblogger.add_scalar('val/AP50_95', evaluator.ap50_95, epoch)
+                        tblogger.add_scalar('val/AP50', evaluator.ap50, epoch)
 
-                if len(bboxes) == 0:
-                    continue
-                img = images[0]
-                img = denormalize(img, np.array([0.406, 0.456, 0.485]), np.array([0.225, 0.224, 0.229]))
-                d = bboxes
-                ind = np.argmax(scores)
-                d = d[ind]
-                #x_min = img.shape[2]*d[0]
-                #x_max = img.shape[2]*d[2]
-                #y_min = img.shape[2]*d[1]
-                #y_max = img.shape[2]*d[3]
+            # wait for all processes to synchronize
+            if args.distributed:
+                dist.barrier()
 
-                x_min = img.shape[2]*d[0]
-                x_max = img.shape[2]*d[2]
-                y_min = img.shape[2]*d[1]
-                y_max = img.shape[2]*d[3]
-
-
-                img = img.detach().cpu().numpy()
-                img = np.swapaxes(img, 0, 2)
-
-                #img = cv2.rectangle(img, (int(x_min), int(y_min)), (int(x_max), int(y_max)), (0, 0, 255), 2)
-                #cv2.imshow('gt', img)
-                #cv2.waitKey(0)
-
-
-                img = Image.fromarray(np.uint8(img * 256))
-                draw = ImageDraw.Draw(img)
-                draw.rectangle((y_min,x_min,   y_max,x_max), outline="blue", width=5)
-                img.save("see/" + str(filename) + "_" + tag + ".jpg")
-                filename += 1
-
-                # wait for all processes to synchronize
-                if args.distributed:
-                    dist.barrier()
-
-        # set train mode.
-        model_eval.trainable = True
-        model_eval.set_grid(train_size)
-        model_eval.train()
+            # set train mode.
+            model_eval.trainable = True
+            model_eval.set_grid(train_size)
+            model_eval.train()
     
     if args.tfboard:
         tblogger.close()

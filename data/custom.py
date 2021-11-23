@@ -103,7 +103,6 @@ class FileDetection(data.Dataset):
 
     def __getitem__(self, index):
         im, gt, h, w = self.pull_item(index)
-
         return im, gt
 
     def __len__(self):

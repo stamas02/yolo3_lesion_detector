@@ -161,8 +161,15 @@ def generate_txtytwth(gt_label, w, h, s, all_anchor_size):
 
         return result 
 
+def gt_creator(model_name, input_size, stride, label_lists, anchor_size):
+    special_models = ['yolov2_d19', 'yolov2_r50', 'yolov2_slim']
+    if model_name in special_models:
+        return _gt_creator(input_size, stride, label_lists, anchor_size)
+    else:
+        return _multi_gt_creator(input_size, stride, label_lists, anchor_size)
 
-def gt_creator(input_size, stride, label_lists, anchor_size):
+
+def _gt_creator(input_size, stride, label_lists, anchor_size):
     """
     Input:
         input_size : list -> the size of image in the training stage.
@@ -215,17 +222,17 @@ def gt_creator(input_size, stride, label_lists, anchor_size):
     return gt_tensor
 
 
-def multi_gt_creator(input_size, strides, label_lists, anchor_size):
+def _multi_gt_creator(input_size, stride, label_lists, anchor_size):
     """creator multi scales gt"""
     # prepare the all empty gt datas
     batch_size = len(label_lists)
     h = w = input_size
-    num_scale = len(strides)
+    num_scale = len(stride)
     gt_tensor = []
     all_anchor_size = anchor_size
     anchor_number = len(all_anchor_size) // num_scale
 
-    for s in strides:
+    for s in stride:
         gt_tensor.append(np.zeros([batch_size, h//s, w//s, anchor_number, 1+1+4+1+4]))
         
     # generate gt datas    
@@ -259,7 +266,7 @@ def multi_gt_creator(input_size, strides, label_lists, anchor_size):
                 s_indx = index // anchor_number
                 ab_ind = index - s_indx * anchor_number
                 # get the corresponding stride
-                s = strides[s_indx]
+                s = stride[s_indx]
                 # get the corresponding anchor box
                 p_w, p_h = anchor_boxes[index, 2], anchor_boxes[index, 3]
                 # compute the gride cell location
@@ -296,7 +303,7 @@ def multi_gt_creator(input_size, strides, label_lists, anchor_size):
                             s_indx = index // anchor_number
                             ab_ind = index - s_indx * anchor_number
                             # get the corresponding stride
-                            s = strides[s_indx]
+                            s = stride[s_indx]
                             # get the corresponding anchor box
                             p_w, p_h = anchor_boxes[index, 2], anchor_boxes[index, 3]
                             # compute the gride cell location
@@ -323,7 +330,7 @@ def multi_gt_creator(input_size, strides, label_lists, anchor_size):
                             # s_indx, ab_ind = index // num_scale, index % num_scale
                             s_indx = index // anchor_number
                             ab_ind = index - s_indx * anchor_number
-                            s = strides[s_indx]
+                            s = stride[s_indx]
                             c_x_s = c_x / s
                             c_y_s = c_y / s
                             grid_x = int(c_x_s)

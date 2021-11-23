@@ -3,462 +3,271 @@ from __future__ import division
 import os
 import random
 import argparse
-import time
-import cv2
-import numpy as np
-
 import torch
 import torch.optim as optim
-import torch.backends.cudnn as cudnn
-import torch.distributed as dist
-from torch.nn.parallel import DistributedDataParallel as DDP
-
-from data.voc0712 import VOCDetection
-from data.coco2017 import COCODataset
-from data import config
+from data.custom import FileDetection
 from data import BaseTransform, detection_collate
-
 import tools
-
-from utils import distributed_utils
-from utils.com_paras_flops import FLOPs_and_Params
-from utils.augmentations import SSDAugmentation, ColorAugmentation
-from utils.cocoapi_evaluator import COCOAPIEvaluator
-from utils.vocapi_evaluator import VOCAPIEvaluator
+from utils.augmentations import SSDAugmentation, SDAugmentation
 from utils.modules import ModelEMA
+import pandas as pd
+import models
+import data.utils
+import utils.training
+from tqdm import tqdm
+from utils.com_paras_flops import FLOPs_and_Params
+from test import test
 
 
-def parse_args():
+def parseargs():
     parser = argparse.ArgumentParser(description='YOLO Detection')
     # basic
-    parser.add_argument('--cuda', action='store_true', default=False,
-                        help='use cuda.')
-    parser.add_argument('--batch_size', default=4, type=int,
-                        help='Batch size for training')
-    parser.add_argument('--lr', default=1e-3, type=float, 
-                        help='initial learning rate')
-    parser.add_argument('--wp_epoch', type=int, default=2,
-                        help='The upper bound of warm-up')
-    parser.add_argument('--start_epoch', type=int, default=0,
-                        help='start epoch to train')
-    parser.add_argument('-r', '--resume', default=None, type=str, 
-                        help='keep training')
-    parser.add_argument('--momentum', default=0.9, type=float, 
-                        help='Momentum value for optim')
-    parser.add_argument('--weight_decay', default=5e-4, type=float, 
-                        help='Weight decay for SGD')
-    parser.add_argument('--num_workers', default=8, type=int, 
-                        help='Number of workers used in dataloading')
-    parser.add_argument('--num_gpu', default=1, type=int, 
-                        help='Number of GPUs to train')
-    parser.add_argument('--eval_epoch', type=int,
-                            default=10, help='interval between evaluations')
-    parser.add_argument('--tfboard', action='store_true', default=False,
-                        help='use tensorboard')
-    parser.add_argument('--save_folder', default='weights/', type=str, 
-                        help='Gamma update for SGD')
-    parser.add_argument('--vis', action='store_true', default=False,
-                        help='visualize target.')
-
+    parser.add_argument('--batch_size', default=1, type=int,
+                        help='Integer Value - Batch size (must be divisible by 2)')
+    parser.add_argument('--base_lr', default=1e-3, type=float,
+                        help='Integer Value - initial learning rate')
+    parser.add_argument('--min_lr', default=1e-6, type=float,
+                        help='Integer Value - minimum learning rate')
+    parser.add_argument('--lr_decay_step', default=10, type=float,
+                        help='Integer Value - Number of epoch after which the learning rate is decayed.')
+    parser.add_argument('--warmup_size', type=int, default=2,
+                        help='Integer Value - The upper bound of warm-up')
+    parser.add_argument('--num_workers', default=1, type=int,
+                        help='String Value - Number of workers used in dataloading')
+    parser.add_argument('--log_dir', default='log/', type=str,
+                        help='String Value - where the training log + the best method weights is are saved.')
     # model
-    parser.add_argument('-v', '--version', default='yolo_v2',
-                        help='yolov2_d19, yolov2_r50, yolov2_slim, yolov3, yolov3_spp, yolov3_tiny')
-    
-    # dataset
-    parser.add_argument('-root', '--data_root', default='/media/stamas01/Data/datasets/VOC/',
-                        help='dataset root')
-    parser.add_argument('-d', '--dataset', default='voc',
-                        help='voc or coco')
-    
-    # train trick
-    parser.add_argument('-hr', '--high_resolution', action='store_true', default=False,
-                        help='use hi-res pre-trained backbone.')  
-    parser.add_argument('-ms', '--multi_scale', action='store_true', default=False,
-                        help='use multi-scale trick')      
-    parser.add_argument('--mosaic', action='store_true', default=False,
-                        help='use mosaic augmentation')
-    parser.add_argument('--ema', action='store_true', default=False,
-                        help='use ema training trick')
+    parser.add_argument('--model_name', default='yolo_v2',
+                        help='String Value - yolov2_d19, yolov2_r50, yolov2_slim, yolov3, yolov3_spp, yolov3_tiny')
 
-    # DDP train
-    parser.add_argument('-dist', '--distributed', action='store_true', default=False,
-                        help='distributed training')
-    parser.add_argument('--local_rank', type=int, default=0, 
-                        help='local_rank')
-    parser.add_argument('--sybn', action='store_true', default=False, 
-                        help='use sybn.')
+    # dataset
+    parser.add_argument("--isic_csv", "-p",
+                        type=str,
+                        help='String Value - The path to the ISIC dataset csv file.',
+                        )
+    parser.add_argument("--negative_dir", "-n",
+                        type=str,
+                        help='String Value - The path to the folder containing only negative examples i.e. healthy skin.',
+                        )
+    parser.add_argument("--val-split", type=float,
+                        default=0.05,
+                        help="Floating Point Value - The percentage of data to be used for validation.")
 
     return parser.parse_args()
 
 
-def train():
-    args = parse_args()
-    print("Setting Arguments.. : ", args)
-    print("----------------------------------------------------------")
-
-    # set distributed
-    local_rank = 0
-    if args.distributed:
-        dist.init_process_group(backend="nccl", init_method="env://")
-        local_rank = torch.distributed.get_rank()
-        print(local_rank)
-        torch.cuda.set_device(local_rank)
-
-    # cuda
-    if args.cuda:
-        print('use cuda')
-        cudnn.benchmark = True
-        device = torch.device("cuda")
-    else:
-        device = torch.device("cpu")
-
-    model_name = args.version
+def train(model_name, log_dir, negative_dir, isic_csv, batch_size, val_split, warmup_size, lr_decay_step,
+          base_lr, min_lr, num_workers):
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     print('Model: ', model_name)
 
-    # load model and config file
-    if model_name == 'yolov2_d19':
-        from models.yolov2_d19 import YOLOv2D19 as yolo_net
-        cfg = config.yolov2_d19_cfg
+    # LOAD YOLO NET WITH A GIVEN ARCHITECTURE AND THE BELONGING CFG
+    yolo_net = models.model_dict[model_name]
+    yolo_net_cfg = models.model_cfg_dict[model_name]
 
-    elif model_name == 'yolov2_r50':
-        from models.yolov2_r50 import YOLOv2R50 as yolo_net
-        cfg = config.yolov2_r50_cfg
+    # CREATE THE LOG DIR IF DOESN'T EXIST
+    os.makedirs(log_dir, exist_ok=True)
 
-    elif model_name == 'yolov2_slim':
-        from models.yolov2_slim import YOLOv2Slim as yolo_net
-        cfg = config.yolov2_slim_cfg
+    # GET DATASETS
 
-    elif model_name == 'yolov3':
-        from models.yolov3 import YOLOv3 as yolo_net
-        cfg = config.yolov3_d53_cfg
+    image_mean = (0.406, 0.456, 0.485)
+    image_std = (0.225, 0.224, 0.229)
 
-    elif model_name == 'yolov3_spp':
-        from models.yolov3_spp import YOLOv3Spp as yolo_net
-        cfg = config.yolov3_d53_cfg
+    input_size = yolo_net_cfg["size"]
+    train_files_n, _, val_files_n = data.utils.get_directory(negative_dir, 0, val_split)
+    train_files_p, train_labels_p, _, _, val_files_p, val_labels_p = data.utils.get_isic(isic_csv, 0, val_split)
 
-    elif model_name == 'yolov3_tiny':
-        from models.yolov3_tiny import YOLOv3tiny as yolo_net
-        cfg = config.yolov3_tiny_cfg
-    else:
-        print('Unknown model name...')
-        exit(0)
+    dataset_positive_train = FileDetection(files=train_files_p, labels=train_labels_p,
+                                           transform=SSDAugmentation(input_size, image_mean, image_std))
+    dataset_positive_val = FileDetection(files=val_files_p, labels=val_labels_p,
+                                         transform=BaseTransform(input_size, image_mean, image_std))
 
-    # path to save model
-    path_to_save = os.path.join(args.save_folder, args.dataset, args.version)
-    os.makedirs(path_to_save, exist_ok=True)
+    dataset_negative_train = FileDetection(files=train_files_n, labels=None,
+                                           transform=SDAugmentation(input_size, image_mean, image_std))
+    dataset_negative_val = FileDetection(files=val_files_n, labels=None,
+                                         transform=BaseTransform(input_size, image_mean, image_std))
 
-    # use hi-res backbone
-    if args.high_resolution:
-        print('use hi-res backbone')
-        hr = True
-    else:
-        hr = False
-    
-    # multi-scale
-    if args.multi_scale:
-        print('use the multi-scale trick ...')
-        train_size = cfg['train_size']
-        val_size = cfg['val_size']
-    else:
-        train_size = val_size = cfg['train_size']
+    # CREATE THE DATALOADERS
+    dataloader_positive_train = torch.utils.data.DataLoader(dataset=dataset_positive_train, shuffle=True, batch_size=batch_size,
+                                                            collate_fn=detection_collate,
+                                                            num_workers=num_workers, pin_memory=True)
+    dataloader_positive_val = torch.utils.data.DataLoader(dataset=dataset_positive_val, shuffle=False, batch_size=batch_size,
+                                                            collate_fn=detection_collate,
+                                                            num_workers=num_workers, pin_memory=True)
+    dataloader_negative_train = torch.utils.data.DataLoader(dataset=dataset_negative_train, shuffle=True, batch_size=batch_size,
+                                                            collate_fn=detection_collate,
+                                                            num_workers=num_workers, pin_memory=True)
+    dataloader_negative_val = torch.utils.data.DataLoader(dataset=dataset_negative_val, shuffle=False, batch_size=batch_size,
+                                                            collate_fn=detection_collate,
+                                                            num_workers=num_workers, pin_memory=True)
 
-    # Model ENA
-    if args.ema:
-        print('use EMA trick ...')
+    epoch_size = min(len(dataset_positive_train), len(dataset_negative_train))
 
-    elif args.dataset == 'voc':
-        data_dir = os.path.join(args.data_root, 'VOCdevkit')
-        num_classes = 20
-        dataset = VOCDetection(data_dir=data_dir, 
-                                transform=SSDAugmentation(train_size))
-
-        evaluator = VOCAPIEvaluator(data_root=data_dir,
-                                    img_size=val_size,
-                                    device=device,
-                                    transform=BaseTransform(val_size))
-
-    elif args.dataset == 'coco':
-        data_dir = os.path.join(args.data_root, 'COCO')
-        num_classes = 80
-        dataset = COCODataset(
-                    data_dir=data_dir,
-                    transform=SSDAugmentation(train_size))
-
-        evaluator = COCOAPIEvaluator(
-                        data_dir=data_dir,
-                        img_size=val_size,
-                        device=device,
-                        transform=BaseTransform(val_size))
-    
-    else:
-        print('unknow dataset !! Only support voc and coco !!')
-        exit(0)
-    
-    print('Training model on:', dataset.name)
-    print('The dataset size:', len(dataset))
-    print("----------------------------------------------------------")
-
-    # build model
-    anchor_size = cfg['anchor_size_voc'] if args.dataset == 'voc' else cfg['anchor_size_coco']
-    net = yolo_net(device=device, 
-                   input_size=train_size, 
-                   num_classes=num_classes, 
-                   trainable=False,
-                   anchor_size=anchor_size, 
-                   hr=hr)
-    model = net
-
-    # SyncBatchNorm
-    if args.sybn and args.cuda and args.num_gpu > 1:
-        print('use SyncBatchNorm ...')
-        model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
-
+    # BUILD THE MODEL
+    model = yolo_net(device=device,
+                     input_size=yolo_net_cfg['size'],
+                     num_classes=8,
+                     trainable=False,
+                     anchor_size=yolo_net_cfg['anchor_size'],
+                     hr=False)
     model = model.to(device)
-    # compute FLOPs and Params
-    FLOPs_and_Params(model=model, size=train_size)
+    model.trainable = True
 
-    # distributed
-    if args.distributed and args.num_gpu > 1:
-        print('using DDP ...')
-        model = DDP(model, device_ids=[local_rank], output_device=local_rank)
-        # dataloader
-        dataloader = torch.utils.data.DataLoader(
-                        dataset=dataset, 
-                        batch_size=args.batch_size, 
-                        collate_fn=detection_collate,
-                        num_workers=args.num_workers,
-                        pin_memory=True,
-                        sampler=torch.utils.data.distributed.DistributedSampler(dataset)
-                        )
+    # CREATE OPTIMIZER
 
-    else:
-        model = model.train().to(device)
-        # dataloader
-        dataloader = torch.utils.data.DataLoader(
-                        dataset=dataset, 
-                        shuffle=True,
-                        batch_size=args.batch_size, 
-                        collate_fn=detection_collate,
-                        num_workers=args.num_workers,
-                        pin_memory=True
-                        )
+    optimizer = optim.SGD(model.parameters(),
+                          lr=base_lr,
+                          momentum=0.9,
+                          weight_decay=5e-4
+                          )
 
-    # keep training
-    if args.resume is not None:
-        print('keep training model: %s' % (args.resume))
-        model.load_state_dict(torch.load(args.resume, map_location=device))
+    lr_scheduler = utils.training.StepLRWithWarmUP(optimizer,
+                                                   warmup_size=warmup_size * epoch_size,
+                                                   step_size=lr_decay_step,
+                                                   min_lr=min_lr,
+                                                   gamma=0.1
+                                                   )
 
-    # EMA
-    ema = ModelEMA(model) if args.ema else None
+    # EMA... whatever it means...
+    ema = ModelEMA(model)
 
-    # use tfboard
-    if args.tfboard:
-        print('use tensorboard')
-        from torch.utils.tensorboard import SummaryWriter
-        c_time = time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time()))
-        log_path = os.path.join('log/', args.dataset, c_time)
-        os.makedirs(log_path, exist_ok=True)
+    # DO TRAINING
+    best_model_file = os.path.join(log_dir, 'best_model.pth')
+    df_train = pd.DataFrame()
+    df_val = pd.DataFrame()
 
-        tblogger = SummaryWriter(log_path)
-    
-    # optimizer setup
-    base_lr = args.lr
-    tmp_lr = base_lr
-    optimizer = optim.SGD(model.parameters(), 
-                            lr=base_lr, 
-                            momentum=args.momentum,
-                            weight_decay=args.weight_decay
-                            )
+    for epoch in range(0, 2):  # yolo_net_cfg["max_epoch"]):
+        conf_loss = cls_loss = box_loss = iou_loss = 0
+        p_bar = tqdm(zip(dataloader_positive_train, dataloader_negative_train),
+                     total=epoch_size,
+                     desc=f"Training epoch {epoch}")
 
-    batch_size = args.batch_size
-    max_epoch = cfg['max_epoch']
-    epoch_size = len(dataset) // (batch_size * args.num_gpu)
-
-    best_map = -100.
-
-    t0 = time.time()
-    # start training loop
-    for epoch in range(args.start_epoch, max_epoch):
-        if args.distributed:
-            dataloader.sampler.set_epoch(epoch)        
-
-        # use step lr
-        if epoch in cfg['lr_epoch']:
-            tmp_lr = tmp_lr * 0.1
-            set_lr(optimizer, tmp_lr)
-    
-        for iter_i, (images, targets) in enumerate(dataloader):
-            # WarmUp strategy for learning rate
-            if epoch < args.wp_epoch:
-                tmp_lr = base_lr * pow((iter_i+epoch*epoch_size)*1. / (args.wp_epoch*epoch_size), 4)
-                set_lr(optimizer, tmp_lr)
-
-            elif epoch == args.wp_epoch and iter_i == 0:
-                tmp_lr = base_lr
-                set_lr(optimizer, tmp_lr)
-
-            # multi-scale trick
-            if iter_i % 10 == 0 and iter_i > 0 and args.multi_scale:
-                # randomly choose a new size
-                r = cfg['random_size_range']
-                train_size = random.randint(r[0], r[1]) * 32
-                model.set_grid(train_size)
-            if args.multi_scale:
-                # interpolate
-                images = torch.nn.functional.interpolate(images, size=train_size, mode='bilinear', align_corners=False)
-            
+        # TRAIN FOR AN EPOCH
+        model.set_grid(input_size)
+        model.train()
+        for iter_i, ((images_p, targets_p), (images_n, targets_n)) in enumerate(p_bar):
+            #if iter_i == 10:
+            #    break
+            lr_scheduler.step()
+            images = torch.cat([images_p, images_n])
+            targets = targets_p + targets_n
             targets = [label.tolist() for label in targets]
-            # visualize labels
-            if args.vis:
-                vis_data(images, targets, train_size)
-                continue
-            # make labels
-            if model_name == 'yolov2_d19' or model_name == 'yolov2_r50' or model_name == 'yolov2_slim':
-                targets = tools.gt_creator(input_size=train_size, 
-                                           stride=net.stride, 
-                                           label_lists=targets, 
-                                           anchor_size=anchor_size
-                                           )
-            else:
-                targets = tools.multi_gt_creator(input_size=train_size, 
-                                                 strides=net.stride, 
-                                                 label_lists=targets, 
-                                                 anchor_size=anchor_size
-                                                 )
+            # multi-scale trick
+            if iter_i % 10:
+                # randomly choose a new size
+                r = yolo_net_cfg['random_size_range']
+                input_size = random.randint(r[0], r[1]) * 32
+                model.set_grid(input_size)
 
-            # to device
+            # Rescale image to their new resolution.
+            images = torch.nn.functional.interpolate(images, size=input_size, mode='bilinear', align_corners=False)
+
+            # Convert the one hot target representation to yolo target.
+            targets = tools.gt_creator(model_name=model_name,
+                                       input_size=input_size,
+                                       stride=model.stride,
+                                       label_lists=targets,
+                                       anchor_size=yolo_net_cfg["anchor_size"]
+                                       )
+
+            # TO DEVICE
             images = images.to(device)
             targets = torch.tensor(targets).float().to(device)
 
-            # forward
-            conf_loss, cls_loss, box_loss, iou_loss = model(images, target=targets)
+            # FORWARD PASS
+            _conf_loss, _cls_loss, _box_loss, _iou_loss = model(images, target=targets)
+            conf_loss += _conf_loss.item()
+            cls_loss += _cls_loss.item()
+            box_loss += _box_loss.item()
+            iou_loss += _iou_loss.item()
 
-            # compute loss
-            total_loss = conf_loss + cls_loss + box_loss + iou_loss
+            # COMPUTE LOSS
+            total_loss = _conf_loss + _cls_loss + _box_loss + _iou_loss
 
-            loss_dict = dict(conf_loss=conf_loss,
-                             cls_loss=cls_loss,
-                             box_loss=box_loss,
-                             iou_loss=iou_loss,
-                             total_loss=total_loss
-                            )
-
-            loss_dict_reduced = distributed_utils.reduce_loss_dict(loss_dict)
-
-            # check NAN for loss
-            if torch.isnan(total_loss):
-                continue
-
-            # backprop
-            total_loss.backward()        
+            # BACKPROP
+            total_loss.backward()
             optimizer.step()
             optimizer.zero_grad()
 
-            # ema
-            if args.ema:
-                ema.update(model)
+            # EMA
+            ema.update(model)
 
-            # display
-            if iter_i % 10 == 0:
-                if args.tfboard:
-                    # viz loss
-                    tblogger.add_scalar('conf loss',  loss_dict_reduced['conf_loss'].item(),  iter_i + epoch * epoch_size)
-                    tblogger.add_scalar('cls loss',  loss_dict_reduced['cls_loss'].item(),  iter_i + epoch * epoch_size)
-                    tblogger.add_scalar('box loss',  loss_dict_reduced['box_loss'].item(),  iter_i + epoch * epoch_size)
-                    tblogger.add_scalar('iou loss',  loss_dict_reduced['iou_loss'].item(),  iter_i + epoch * epoch_size)
-                
-                t1 = time.time()
-                outstream = ('[Epoch %d/%d][Iter %d/%d][lr %.6f]'
-                        '[Loss: conf %.2f || cls %.2f || box %.2f || iou %.2f || size %d || time: %.2f]'
-                        % (epoch+1, 
-                           max_epoch, 
-                           iter_i, 
-                           epoch_size, 
-                           tmp_lr,
-                           loss_dict_reduced['conf_loss'].item(),
-                           loss_dict_reduced['cls_loss'].item(), 
-                           loss_dict_reduced['box_loss'].item(),
-                           loss_dict_reduced['iou_loss'].item(),
-                           train_size, 
-                           t1-t0))
+            # DISPLAY TRAINING INFO
+            p_bar.set_postfix({'[Losses -> total': f"{total_loss.item():.3f}",
+                               'conf': f"{_conf_loss.item():.3f}",
+                               'cls': f"{_cls_loss.item():.3f}",
+                               'box': f"{_box_loss.item():.3f}",
+                               'iou': f"{_iou_loss.item():.3f}",
+                               '], LR': lr_scheduler.get_lr(),
+                               'size': f"{input_size}"})
 
-                print(outstream, flush=True)
+        # VALIDATE AFTER EPOCH
 
-                t0 = time.time()
+        model.set_grid(yolo_net_cfg['size'])
+        model.eval()
 
-        # evaluation
-        if (epoch + 1) % args.eval_epoch == 0:
-            if args.ema:
-                model_eval = ema.ema
-            else:
-                model_eval = model.module if args.distributed else model
+        df_train = df_train.append({'conf loss': conf_loss / epoch_size,
+                                    'class loss': cls_loss / epoch_size,
+                                    'box loss': box_loss / epoch_size,
+                                    'iou loss': iou_loss / epoch_size}, ignore_index=True)
 
-            # set eval mode
-            model_eval.trainable = False
-            model_eval.set_grid(val_size)
-            model_eval.eval()
+        p_bar = tqdm(zip(dataloader_positive_val, dataloader_negative_val),
+                     total=epoch_size,
+                     desc=f"Validating after epoch {epoch}")
+        # VALIDATE
+        conf_loss = cls_loss = box_loss = iou_loss = 0
+        with torch.no_grad():
+            for iter_i, ((images_p, targets_p), (images_n, targets_n)) in enumerate(p_bar):
+                # if iter_i == 10:
+                #     break
+                images = torch.cat([images_p, images_n])
+                targets = targets_p + targets_n
+                targets = [label.tolist() for label in targets]
+                # Convert the one hot target representation to yolo target.
+                targets = tools.gt_creator(model_name=model_name,
+                                           input_size=yolo_net_cfg["size"],
+                                           stride=model.stride,
+                                           label_lists=targets,
+                                           anchor_size=yolo_net_cfg["anchor_size"]
+                                           )
+                targets = torch.tensor(targets).float().to(device)
+                # TO DEVICE
+                images = images.to(device)
+                # FORWARD PASS
+                _conf_loss, _cls_loss, _box_loss, _iou_loss = model(images, target=targets)
+                conf_loss += _conf_loss.item()
+                cls_loss += _cls_loss.item()
+                box_loss += _box_loss.item()
+                iou_loss += _iou_loss.item()
 
-            if local_rank == 0:
-                # evaluate
-                evaluator.evaluate(model_eval)
+                # COMPUTE LOSS
+                total_loss = _conf_loss + _cls_loss + _box_loss + _iou_loss
 
-                cur_map = evaluator.map if args.dataset == 'voc' else evaluator.ap50_95
-                if cur_map > best_map:
-                    # update best-map
-                    best_map = cur_map
-                    # save model
-                    print('Saving state, epoch:', epoch + 1)
-                    torch.save(model_eval.state_dict(), os.path.join(path_to_save, 
-                                args.version + '_' + repr(epoch + 1) + '_' + str(round(best_map, 2)) + '.pth')
-                                )  
-                if args.tfboard:
-                    if args.dataset == 'voc':
-                        tblogger.add_scalar('07test/mAP', evaluator.map, epoch)
-                    elif args.dataset == 'coco':
-                        tblogger.add_scalar('val/AP50_95', evaluator.ap50_95, epoch)
-                        tblogger.add_scalar('val/AP50', evaluator.ap50, epoch)
+                # DISPLAY VALIDATION INFO
+                p_bar.set_postfix({'[Losses -> total': f"{total_loss.item():.3f}",
+                                   'conf': f"{_conf_loss.item():.3f}",
+                                   'cls': f"{_cls_loss.item():.3f}",
+                                   'box_loss': f"{_box_loss.item():.3f}",
+                                   'iou_loss': f"{_iou_loss.item():.3f}",
+                                   '], size': f"{yolo_net_cfg['anchor_size']}"})
 
-            # wait for all processes to synchronize
-            if args.distributed:
-                dist.barrier()
+            df_val = df_val.append({'conf loss': conf_loss / epoch_size,
+                                    'class loss': cls_loss / epoch_size,
+                                    'box loss': box_loss / epoch_size,
+                                    'iou loss': iou_loss / epoch_size}, ignore_index=True)
 
-            # set train mode.
-            model_eval.trainable = True
-            model_eval.set_grid(train_size)
-            model_eval.train()
-    
-    if args.tfboard:
-        tblogger.close()
+            # If the current model is so far the best
+            if df_val.sum(axis=1).idxmin() == df_val.shape[0] - 1:
+                torch.save(model.state_dict(), os.path.join(log_dir, 'best_model.pth'))
 
-
-def set_lr(optimizer, lr):
-    for param_group in optimizer.param_groups:
-        param_group['lr'] = lr
-
-
-def vis_data(images, targets, input_size):
-    # vis data
-    mean=(0.406, 0.456, 0.485)
-    std=(0.225, 0.224, 0.229)
-    mean = np.array(mean, dtype=np.float32)
-    std = np.array(std, dtype=np.float32)
-
-    img = images[0].permute(1, 2, 0).cpu().numpy()[:, :, ::-1]
-    img = ((img * std + mean)*255).astype(np.uint8)
-    img = img.copy()
-
-    for box in targets[0]:
-        xmin, ymin, xmax, ymax = box[:-1]
-        # print(xmin, ymin, xmax, ymax)
-        xmin *= input_size
-        ymin *= input_size
-        xmax *= input_size
-        ymax *= input_size
-        cv2.rectangle(img, (int(xmin), int(ymin)), (int(xmax), int(ymax)), (0, 0, 255), 2)
-
-    cv2.imshow('img', img)
-    cv2.waitKey(0)
+    df_train.to_csv(os.path.join(log_dir, 'train_log.csv'))
+    df_val.to_csv(os.path.join(log_dir, 'val_log.csv'))
+    model.load_state_dict(torch.load(os.path.join(log_dir, 'best_model.pth')))
+    model.eval()
+    test(model, device, dataloader_positive_val, log_dir=os.path.join(log_dir, "positive_val/"))
+    test(model, device, dataloader_negative_val, log_dir=os.path.join(log_dir, "negative_val/"))
 
 
 if __name__ == '__main__':
-    train()
+    args = parseargs()
+    train(**args.__dict__)
