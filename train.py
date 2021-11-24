@@ -8,7 +8,7 @@ import torch.optim as optim
 from data.custom import FileDetection
 from data import BaseTransform, detection_collate
 import tools
-from utils.augmentations import SSDAugmentation, SDAugmentation
+from utils.augmentations import TransformTrain, TransformTest
 from utils.modules import ModelEMA
 import pandas as pd
 import models
@@ -78,14 +78,14 @@ def train(model_name, log_dir, negative_dir, isic_csv, batch_size, val_split, wa
     train_files_p, train_labels_p, _, _, val_files_p, val_labels_p = data.utils.get_isic(isic_csv, 0, val_split)
 
     dataset_positive_train = FileDetection(files=train_files_p, labels=train_labels_p,
-                                           transform=SSDAugmentation(input_size, image_mean, image_std))
+                                           transform=TransformTrain(input_size))
     dataset_positive_val = FileDetection(files=val_files_p, labels=val_labels_p,
-                                         transform=BaseTransform(input_size, image_mean, image_std))
+                                         transform=TransformTrain(input_size))
 
     dataset_negative_train = FileDetection(files=train_files_n, labels=None,
-                                           transform=SDAugmentation(input_size, image_mean, image_std))
+                                           transform=TransformTest(input_size))
     dataset_negative_val = FileDetection(files=val_files_n, labels=None,
-                                         transform=BaseTransform(input_size, image_mean, image_std))
+                                         transform=TransformTest(input_size))
 
     # CREATE THE DATALOADERS
     dataloader_positive_train = torch.utils.data.DataLoader(dataset=dataset_positive_train, shuffle=True, batch_size=batch_size,

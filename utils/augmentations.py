@@ -3,6 +3,8 @@ import numpy as np
 from numpy import random
 from torchvision.transforms import functional as F
 from torchvision import transforms
+import torch
+from PIL import Image
 
 
 def intersect(box_a, box_b):
@@ -438,15 +440,12 @@ class SDAugmentation(object):
         max_scale = 1.0
         r_scale = (max_scale - min_scale) * np.random.random() + min_scale
         new_size = int(r_scale * min(img.shape[0], img.shape[1]))
-        x_min = int(((w - new_size)//2) * np.random.random())
-        y_min = int(((h - new_size)//2) * np.random.random())
+        x_min = int(((w - new_size) // 2) * np.random.random())
+        y_min = int(((h - new_size) // 2) * np.random.random())
 
         img = img[y_min:y_min + new_size, x_min:x_min + new_size]
 
         return self.augment(img, boxes, labels)
-
-
-
 
 
 class ColorAugmentation(object):
@@ -466,3 +465,110 @@ class ColorAugmentation(object):
 
     def __call__(self, img, boxes, labels):
         return self.augment(img, boxes, labels)
+
+
+class CenterFullCrop(torch.nn.Module):
+    """Crops the given image at the center.
+    If the image is torch Tensor, it is expected
+    to have [..., H, W] shape, where ... means an arbitrary number of leading dimensions.
+    If image size is smaller than output size along any edge, image is padded with 0 and then center cropped.
+
+    Args:
+        size (sequence or int): Desired output size of the crop. If size is an
+            int instead of sequence like (h, w), a square crop (size, size) is
+            made. If provided a sequence of length 1, it will be interpreted as (size[0], size[0]).
+    """
+
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, img):
+        """
+        Args:
+            img (PIL Image or Tensor): Image to be cropped.
+
+        Returns:
+            PIL Image or Tensor: Cropped image.
+        """
+        new_size = min(img.size[0], img.size[1])
+        return F.center_crop(img, (new_size, new_size))
+
+    def __repr__(self):
+        return self.__class__.__name__ + '(size={0})'.format(self.size)
+
+
+class RandomShrinkWithBB(torch.nn.Module):
+    """ Shrinks the image randomly so that it keeps its original dimensions by filling the rest  with its mean color"""
+
+    def __init__(self, ratio):
+        """
+
+        Args:
+            ratio: Ratio by with the image is shrink compared to its original size. E.g 0.5 shrinks the image half size.
+        """
+        self.ratio = ratio
+
+    def __call__(self, img, bboxes):
+        """
+
+        Args:
+            img: The image to be shrank. PIL Image
+            bboxes: [[xmin, ymin, ymax, ymax],..,[]], shape [num of bounding boxes, 4].
+
+        Returns: shrank image and the accordingly resized bounding boxes.
+
+        """
+        width, height = img.size
+        fill_color = np.mean(img, axis=(0, 1), dtype=int)
+        new_img = Image.new(img.mode, (width, height), tuple(fill_color))
+        shrink_ratio = random.uniform(self.ratio, 1)
+        shrinked_width, shrinked_height = (int(shrink_ratio * width), int(shrink_ratio * height))
+        shrinked_img = img.resize((shrinked_width, shrinked_height))
+        left_pos = random.randint(0, width - shrinked_width)
+        top_pos = random.randint(0, height - shrinked_height)
+        new_img.paste(shrinked_img, (left_pos, top_pos))
+        for i, bbox in enumerate(bboxes):
+            bboxes[i][0] = ((bboxes[i][0] * shrinked_width) + left_pos) / width
+            bboxes[i][2] = ((bboxes[i][1] * shrinked_width) + left_pos) / width
+            bboxes[i][1] = ((bboxes[i][1] * shrinked_height) + left_pos) / height
+            bboxes[i][3] = ((bboxes[i][3] * shrinked_height) + left_pos) / height
+
+        return new_img, bboxes
+
+
+class TransformTrain(object):
+    def __init__(self, size=416, crop_scale=(0.08, 1.0), use_random_shrink=False):
+        self.size = size
+        self.use_random_shrink = use_random_shrink
+        self.augment_1 = transforms.Compose([
+            CenterFullCrop(),
+            transforms.RandomResizedCrop(size, crop_scale),
+            transforms.RandomHorizontalFlip(),
+            transforms.RandomVerticalFlip(),
+            # transforms.ColorJitter(brightness=32. / 255., saturation=0.5),
+        ])
+        self.augment_2 = RandomShrinkWithBB(1 / 16)
+        self.augment_3 = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])])
+
+    def __call__(self, img, bbox):
+        img = self.augment_1(img)
+        if self.use_random_shrink:
+            img, bbox = self.augment_2(img, bbox)
+        img = self.augment_3(img)
+        return img, bbox
+
+
+class TransformTest(object):
+    def __init__(self, size=416):
+        self.size = size
+        self.augment = transforms.Compose([
+            CenterFullCrop(),
+            transforms.Resize(size),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+        ])
+
+    def __call__(self, img, bbox=None):
+        return self.augment(img), bbox if bbox is not None else self.augment(img)
