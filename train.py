@@ -28,7 +28,7 @@ def parseargs():
                         help='Integer Value - initial learning rate')
     parser.add_argument('--min_lr', default=1e-6, type=float,
                         help='Integer Value - minimum learning rate')
-    parser.add_argument('--lr_decay_step', default=10, type=float,
+    parser.add_argument('--lr_decay_step', default=3, type=float,
                         help='Integer Value - Number of epoch after which the learning rate is decayed.')
     parser.add_argument('--warmup_size', type=int, default=2,
                         help='Integer Value - The upper bound of warm-up')
@@ -101,8 +101,8 @@ def train(model_name, log_dir, negative_dir, isic_csv, batch_size, val_split, wa
                                                             collate_fn=detection_collate,
                                                             num_workers=num_workers, pin_memory=True)
 
-    epoch_size = min(len(dataset_positive_train), len(dataset_negative_train))
-
+    epoch_size_train = min(len(dataset_positive_train), len(dataset_negative_train))//batch_size
+    epoch_size_val = min(len(dataset_positive_val), len(dataset_negative_val))//batch_size
     # BUILD THE MODEL
     model = yolo_net(device=device,
                      input_size=yolo_net_cfg['size'],
@@ -122,8 +122,8 @@ def train(model_name, log_dir, negative_dir, isic_csv, batch_size, val_split, wa
                           )
 
     lr_scheduler = utils.training.StepLRWithWarmUP(optimizer,
-                                                   warmup_size=warmup_size * epoch_size,
-                                                   step_size=lr_decay_step,
+                                                   warmup_size=warmup_size * epoch_size_train,
+                                                   step_size=lr_decay_step * epoch_size_train,
                                                    min_lr=min_lr,
                                                    gamma=0.1
                                                    )
@@ -136,10 +136,10 @@ def train(model_name, log_dir, negative_dir, isic_csv, batch_size, val_split, wa
     df_train = pd.DataFrame()
     df_val = pd.DataFrame()
 
-    for epoch in range(0, 2):  # yolo_net_cfg["max_epoch"]):
+    for epoch in range(0, yolo_net_cfg["max_epoch"]):
         conf_loss = cls_loss = box_loss = iou_loss = 0
         p_bar = tqdm(zip(dataloader_positive_train, dataloader_negative_train),
-                     total=epoch_size,
+                     total=epoch_size_train,
                      desc=f"Training epoch {epoch}")
 
         # TRAIN FOR AN EPOCH
@@ -206,13 +206,13 @@ def train(model_name, log_dir, negative_dir, isic_csv, batch_size, val_split, wa
         model.set_grid(yolo_net_cfg['size'])
         model.eval()
 
-        df_train = df_train.append({'conf loss': conf_loss / epoch_size,
-                                    'class loss': cls_loss / epoch_size,
-                                    'box loss': box_loss / epoch_size,
-                                    'iou loss': iou_loss / epoch_size}, ignore_index=True)
+        df_train = df_train.append({'conf loss': conf_loss / epoch_size_train,
+                                    'class loss': cls_loss / epoch_size_train,
+                                    'box loss': box_loss / epoch_size_train,
+                                    'iou loss': iou_loss / epoch_size_train}, ignore_index=True)
 
         p_bar = tqdm(zip(dataloader_positive_val, dataloader_negative_val),
-                     total=epoch_size,
+                     total=epoch_size_val,
                      desc=f"Validating after epoch {epoch}")
         # VALIDATE
         conf_loss = cls_loss = box_loss = iou_loss = 0
@@ -251,10 +251,10 @@ def train(model_name, log_dir, negative_dir, isic_csv, batch_size, val_split, wa
                                    'iou_loss': f"{_iou_loss.item():.3f}",
                                    '], size': f"{yolo_net_cfg['anchor_size']}"})
 
-            df_val = df_val.append({'conf loss': conf_loss / epoch_size,
-                                    'class loss': cls_loss / epoch_size,
-                                    'box loss': box_loss / epoch_size,
-                                    'iou loss': iou_loss / epoch_size}, ignore_index=True)
+            df_val = df_val.append({'conf loss': conf_loss / epoch_size_val,
+                                    'class loss': cls_loss / epoch_size_val,
+                                    'box loss': box_loss / epoch_size_val,
+                                    'iou loss': iou_loss / epoch_size_val}, ignore_index=True)
 
             # If the current model is so far the best
             if df_val.sum(axis=1).idxmin() == df_val.shape[0] - 1:

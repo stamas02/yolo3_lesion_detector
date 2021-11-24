@@ -11,8 +11,7 @@ yolov2_d19_cfg = {
     # anchor size
     'anchor_size_voc': [[2,2], [3,3], [4,4], [6,6], [11,11]],
     # train
-    'lr_epoch': (150, 200),
-    'max_epoch': 250,
+    'max_epoch': 40,
     'ignore_thresh': 0.5
 }
 
@@ -26,8 +25,7 @@ yolov2_r50_cfg = {
     # anchor size
     'anchor_size': [[2,2], [3,3], [4,4], [6,6], [11,11]],
     # train
-    'lr_epoch': (150, 200),
-    'max_epoch': 250,
+    'max_epoch': 40,
     'ignore_thresh': 0.5
 }
 
@@ -41,8 +39,7 @@ yolov2_slim_cfg = {
     # anchor size
     'anchor_size': [[2,2], [3,3], [4,4], [6,6], [11,11]],
     # train
-    'lr_epoch': (90, 120),
-    'max_epoch': 150,
+    'max_epoch': 40,
     'ignore_thresh': 0.5
 }
 
@@ -57,8 +54,7 @@ yolov3_d53_cfg = {
     'anchor_size': [[10, 10], [30, 30], [60, 60],
                     [100, 100], [150, 150], [200, 200]],
     # train
-    'lr_epoch': (150, 200),
-    'max_epoch': 250,
+    'max_epoch': 40,
     'ignore_thresh': 0.5
 }
 
@@ -73,7 +69,6 @@ yolov3_tiny_cfg = {
     'anchor_size': [[10, 10], [30, 30], [60, 60],
                     [100, 100], [150, 150], [200, 200]],
     # train
-    'lr_epoch': (150, 200),
-    'max_epoch': 250,
+    'max_epoch': 3,
     'ignore_thresh': 0.5
 }

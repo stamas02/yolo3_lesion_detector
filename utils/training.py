@@ -28,4 +28,5 @@ class StepLRWithWarmUP():
             lr = max(lr, self.min_lr)
         else:
             lr = self.get_lr()
+        self.iter_cnt += 1
         self._set_lr(lr)
