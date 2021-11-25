@@ -184,8 +184,8 @@ def train(model_name, log_dir, negative_dir, isic_csv, batch_size, val_split, wa
             iou_loss += _iou_loss.item()
 
             # COMPUTE LOSS
-            total_loss = _conf_loss + _cls_loss + _box_loss + _iou_loss
-
+            _total_loss = _conf_loss + _cls_loss + _box_loss + _iou_loss
+            total_loss += _total_loss.item()
             # BACKPROP
             total_loss.backward()
             optimizer.step()
@@ -195,11 +195,11 @@ def train(model_name, log_dir, negative_dir, isic_csv, batch_size, val_split, wa
             ema.update(model)
 
             # DISPLAY TRAINING INFO
-            p_bar.set_postfix({'[Losses -> total': f"{total_loss.item():.3f}",
-                               'conf': f"{_conf_loss.item():.3f}",
-                               'cls': f"{_cls_loss.item():.3f}",
-                               'box': f"{_box_loss.item():.3f}",
-                               'iou': f"{_iou_loss.item():.3f}",
+            p_bar.set_postfix({'[Losses -> total': f"{total_loss/iter_i:.3f}",
+                               'conf': f"{conf_loss/iter_i:.3f}",
+                               'cls': f"{cls_loss/iter_i:.3f}",
+                               'box': f"{box_loss/iter_i:.3f}",
+                               'iou': f"{iou_loss/iter_i:.3f}",
                                '], LR': lr_scheduler.get_lr(),
                                'size': f"{input_size}"})
 
@@ -217,7 +217,7 @@ def train(model_name, log_dir, negative_dir, isic_csv, batch_size, val_split, wa
                      total=epoch_size_val,
                      desc=f"Validating after epoch {epoch}")
         # VALIDATE
-        conf_loss = cls_loss = box_loss = iou_loss = 0
+        conf_loss = cls_loss = box_loss = iou_loss = total_loss = 0
         with torch.no_grad():
             for iter_i, ((images_p, targets_p), (images_n, targets_n)) in enumerate(p_bar):
                 #if iter_i == 10:
@@ -243,17 +243,18 @@ def train(model_name, log_dir, negative_dir, isic_csv, batch_size, val_split, wa
                 iou_loss += _iou_loss.item()
 
                 # COMPUTE LOSS
-                total_loss = _conf_loss + _cls_loss + _box_loss + _iou_loss
+                total_loss += conf_loss + cls_loss + box_loss + iou_loss
 
                 # DISPLAY VALIDATION INFO
-                p_bar.set_postfix({'[Losses -> total': f"{total_loss.item():.3f}",
-                                   'conf': f"{_conf_loss.item():.3f}",
-                                   'cls': f"{_cls_loss.item():.3f}",
-                                   'box_loss': f"{_box_loss.item():.3f}",
-                                   'iou_loss': f"{_iou_loss.item():.3f}",
+                p_bar.set_postfix({'[Losses -> total': f"{total_loss/iter_i:.3f}",
+                                   'conf': f"{conf_loss/iter_i:.3f}",
+                                   'cls': f"{cls_loss/iter_i:.3f}",
+                                   'box_loss': f"{box_loss/iter_i:.3f}",
+                                   'iou_loss': f"{iou_loss/iter_i:.3f}",
                                    '], size': f"{yolo_net_cfg['size']}"})
 
-            df_val = df_val.append({'conf loss': conf_loss / epoch_size_val,
+            df_val = df_val.append({'total loss': conf_loss / epoch_size_val,
+                                    'conf loss': conf_loss / epoch_size_val,
                                     'class loss': cls_loss / epoch_size_val,
                                     'box loss': box_loss / epoch_size_val,
                                     'iou loss': iou_loss / epoch_size_val}, ignore_index=True)
