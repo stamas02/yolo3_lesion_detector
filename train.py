@@ -138,7 +138,7 @@ def train(model_name, log_dir, negative_dir, isic_csv, batch_size, val_split, wa
     df_train = pd.DataFrame()
     df_val = pd.DataFrame()
 
-    for epoch in range(0, 2):  # yolo_net_cfg["max_epoch"]):
+    for epoch in range(0, yolo_net_cfg["max_epoch"]):
         conf_loss = cls_loss = box_loss = iou_loss = 0
         p_bar = tqdm(zip(dataloader_positive_train, dataloader_negative_train),
                      total=epoch_size_train,
