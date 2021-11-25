@@ -70,9 +70,6 @@ def train(model_name, log_dir, negative_dir, isic_csv, batch_size, val_split, wa
 
     # GET DATASETS
 
-    image_mean = (0.406, 0.456, 0.485)
-    image_std = (0.225, 0.224, 0.229)
-
     input_size = yolo_net_cfg["size"]
     train_files_n, _, val_files_n = data.utils.get_directory(negative_dir, 0, val_split)
     train_files_p, train_labels_p, _, _, val_files_p, val_labels_p = data.utils.get_isic(isic_csv, 0, val_split)
@@ -152,8 +149,8 @@ def train(model_name, log_dir, negative_dir, isic_csv, batch_size, val_split, wa
         model.set_grid(input_size)
         model.train()
         for iter_i, ((images_p, targets_p), (images_n, targets_n)) in enumerate(p_bar):
-            if iter_i == 10:
-                break
+            #if iter_i == 10:
+            #    break
             lr_scheduler.step()
             images = torch.cat([images_p, images_n])
             targets = targets_p + targets_n
@@ -224,8 +221,8 @@ def train(model_name, log_dir, negative_dir, isic_csv, batch_size, val_split, wa
         conf_loss = cls_loss = box_loss = iou_loss = 0
         with torch.no_grad():
             for iter_i, ((images_p, targets_p), (images_n, targets_n)) in enumerate(p_bar):
-                if iter_i == 10:
-                    break
+                #if iter_i == 10:
+                #    break
                 images = torch.cat([images_p, images_n])
                 targets = targets_p + targets_n
                 targets = [label.tolist() for label in targets]

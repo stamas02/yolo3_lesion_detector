@@ -12,7 +12,7 @@ def denormalize(image, mean, std):
     return image
 
 
-def viz_annotation(image, box, save_to, image_mean=[0, 0, 0], image_std=[1, 1, 1], target = None):
+def viz_annotation(image, box, save_to, image_mean=[0.5, 0.5, 0.5], image_std=[0.5, 0.5, 0.5], target = None):
     image = image.detach().cpu()
     image = image * torch.tensor(image_std).view(3, 1, 1)
     image = image + torch.tensor(image_mean).view(3, 1, 1)

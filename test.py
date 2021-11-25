@@ -9,8 +9,7 @@ import data.utils
 from tqdm import tqdm
 from utils.visualization import viz_annotation
 import numpy as np
-image_mean = (0.406, 0.456, 0.485)
-image_std = (0.225, 0.224, 0.229)
+
 
 
 def parseargs():
