@@ -78,31 +78,37 @@ def train(model_name, log_dir, negative_dir, isic_csv, batch_size, val_split, wa
     train_files_p, train_labels_p, _, _, val_files_p, val_labels_p = data.utils.get_isic(isic_csv, 0, val_split)
 
     dataset_positive_train = FileDetection(files=train_files_p, labels=train_labels_p,
-                                           transform=TransformTrain(input_size))
+                                           transform=TransformTrain(input_size, crop_scale=(0.3, 1.0),
+                                                                    use_random_shrink=True))
     dataset_positive_val = FileDetection(files=val_files_p, labels=val_labels_p,
-                                         transform=TransformTrain(input_size))
+                                         transform=TransformTrain(input_size, crop_scale=(0.3, 1.0),
+                                                                    use_random_shrink=True))
 
     dataset_negative_train = FileDetection(files=train_files_n, labels=None,
-                                           transform=TransformTest(input_size))
+                                           transform=TransformTrain(input_size))
     dataset_negative_val = FileDetection(files=val_files_n, labels=None,
-                                         transform=TransformTest(input_size))
+                                         transform=TransformTrain(input_size))
 
     # CREATE THE DATALOADERS
-    dataloader_positive_train = torch.utils.data.DataLoader(dataset=dataset_positive_train, shuffle=True, batch_size=batch_size,
+    dataloader_positive_train = torch.utils.data.DataLoader(dataset=dataset_positive_train, shuffle=True,
+                                                            batch_size=batch_size,
                                                             collate_fn=detection_collate,
                                                             num_workers=num_workers, pin_memory=True)
-    dataloader_positive_val = torch.utils.data.DataLoader(dataset=dataset_positive_val, shuffle=False, batch_size=batch_size,
+    dataloader_positive_val = torch.utils.data.DataLoader(dataset=dataset_positive_val, shuffle=False,
+                                                          batch_size=batch_size,
+                                                          collate_fn=detection_collate,
+                                                          num_workers=num_workers, pin_memory=True)
+    dataloader_negative_train = torch.utils.data.DataLoader(dataset=dataset_negative_train, shuffle=True,
+                                                            batch_size=batch_size,
                                                             collate_fn=detection_collate,
                                                             num_workers=num_workers, pin_memory=True)
-    dataloader_negative_train = torch.utils.data.DataLoader(dataset=dataset_negative_train, shuffle=True, batch_size=batch_size,
-                                                            collate_fn=detection_collate,
-                                                            num_workers=num_workers, pin_memory=True)
-    dataloader_negative_val = torch.utils.data.DataLoader(dataset=dataset_negative_val, shuffle=False, batch_size=batch_size,
-                                                            collate_fn=detection_collate,
-                                                            num_workers=num_workers, pin_memory=True)
+    dataloader_negative_val = torch.utils.data.DataLoader(dataset=dataset_negative_val, shuffle=False,
+                                                          batch_size=batch_size,
+                                                          collate_fn=detection_collate,
+                                                          num_workers=num_workers, pin_memory=True)
 
-    epoch_size_train = min(len(dataset_positive_train), len(dataset_negative_train))//batch_size
-    epoch_size_val = min(len(dataset_positive_val), len(dataset_negative_val))//batch_size
+    epoch_size_train = min(len(dataset_positive_train), len(dataset_negative_train)) // batch_size
+    epoch_size_val = min(len(dataset_positive_val), len(dataset_negative_val)) // batch_size
     # BUILD THE MODEL
     model = yolo_net(device=device,
                      input_size=yolo_net_cfg['size'],
@@ -136,7 +142,7 @@ def train(model_name, log_dir, negative_dir, isic_csv, batch_size, val_split, wa
     df_train = pd.DataFrame()
     df_val = pd.DataFrame()
 
-    for epoch in range(0, yolo_net_cfg["max_epoch"]):
+    for epoch in range(0, 2):  # yolo_net_cfg["max_epoch"]):
         conf_loss = cls_loss = box_loss = iou_loss = 0
         p_bar = tqdm(zip(dataloader_positive_train, dataloader_negative_train),
                      total=epoch_size_train,
@@ -146,8 +152,8 @@ def train(model_name, log_dir, negative_dir, isic_csv, batch_size, val_split, wa
         model.set_grid(input_size)
         model.train()
         for iter_i, ((images_p, targets_p), (images_n, targets_n)) in enumerate(p_bar):
-            #if iter_i == 10:
-            #    break
+            if iter_i == 10:
+                break
             lr_scheduler.step()
             images = torch.cat([images_p, images_n])
             targets = targets_p + targets_n
@@ -218,8 +224,8 @@ def train(model_name, log_dir, negative_dir, isic_csv, batch_size, val_split, wa
         conf_loss = cls_loss = box_loss = iou_loss = 0
         with torch.no_grad():
             for iter_i, ((images_p, targets_p), (images_n, targets_n)) in enumerate(p_bar):
-                # if iter_i == 10:
-                #     break
+                if iter_i == 10:
+                    break
                 images = torch.cat([images_p, images_n])
                 targets = targets_p + targets_n
                 targets = [label.tolist() for label in targets]
@@ -249,7 +255,7 @@ def train(model_name, log_dir, negative_dir, isic_csv, batch_size, val_split, wa
                                    'cls': f"{_cls_loss.item():.3f}",
                                    'box_loss': f"{_box_loss.item():.3f}",
                                    'iou_loss': f"{_iou_loss.item():.3f}",
-                                   '], size': f"{yolo_net_cfg['anchor_size']}"})
+                                   '], size': f"{yolo_net_cfg['size']}"})
 
             df_val = df_val.append({'conf loss': conf_loss / epoch_size_val,
                                     'class loss': cls_loss / epoch_size_val,

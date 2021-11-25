@@ -513,7 +513,7 @@ class RandomShrinkWithBB(torch.nn.Module):
 
         Args:
             img: The image to be shrank. PIL Image
-            bboxes: [[xmin, ymin, ymax, ymax],..,[]], shape [num of bounding boxes, 4].
+            bboxes: [[xmin, ymin, xmax, ymax],..,[]], shape [num of bounding boxes, 4].
 
         Returns: shrank image and the accordingly resized bounding boxes.
 
@@ -529,9 +529,9 @@ class RandomShrinkWithBB(torch.nn.Module):
         new_img.paste(shrinked_img, (left_pos, top_pos))
         for i, bbox in enumerate(bboxes):
             bboxes[i][0] = ((bboxes[i][0] * shrinked_width) + left_pos) / width
-            bboxes[i][2] = ((bboxes[i][1] * shrinked_width) + left_pos) / width
-            bboxes[i][1] = ((bboxes[i][1] * shrinked_height) + left_pos) / height
-            bboxes[i][3] = ((bboxes[i][3] * shrinked_height) + left_pos) / height
+            bboxes[i][1] = ((bboxes[i][1] * shrinked_height) + top_pos) / height
+            bboxes[i][2] = ((bboxes[i][2] * shrinked_width) + left_pos) / width
+            bboxes[i][3] = ((bboxes[i][3] * shrinked_height) + top_pos) / height
 
         return new_img, bboxes
 
