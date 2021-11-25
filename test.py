@@ -3,7 +3,7 @@ import argparse
 import torch
 from data.custom import FileDetection
 from data import BaseTransform, detection_collate
-from utils.augmentations import SDAugmentation
+from utils.augmentations import TransformTest
 import models
 import data.utils
 from tqdm import tqdm
@@ -53,7 +53,7 @@ def test(model, device, data_loader, log_dir):
         bbox = bboxes[best_bb_ind]
         output_filename = str(scores[best_bb_ind]).replace(".","_")+"_"+os.path.basename(data_loader.dataset.files[iter_i])
         output_filename = os.path.join(log_dir,output_filename)
-        viz_annotation(images[0], bbox, output_filename, image_mean, image_std, target=targets[0])
+        viz_annotation(images[0], bbox, output_filename, target=targets[0])
 
 
 def main(model_name, model_file, dataset_csv, log_dir, num_workers):
@@ -67,7 +67,7 @@ def main(model_name, model_file, dataset_csv, log_dir, num_workers):
 
     # CREATE THE DATALOADERS
     dataset = FileDetection(files=test_files_p, labels=test_labels_p,
-                            transform=BaseTransform(input_size, image_mean, image_std))
+                            transform=TransformTest)
     data_loader = torch.utils.data.DataLoader(dataset=dataset,
                                               shuffle=False,
                                               batch_size=1,

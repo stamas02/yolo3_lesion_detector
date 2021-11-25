@@ -28,7 +28,7 @@ def parseargs():
                         help='Integer Value - initial learning rate')
     parser.add_argument('--min_lr', default=1e-6, type=float,
                         help='Integer Value - minimum learning rate')
-    parser.add_argument('--lr_decay_step', default=3, type=float,
+    parser.add_argument('--lr_decay_step', default=10, type=float,
                         help='Integer Value - Number of epoch after which the learning rate is decayed.')
     parser.add_argument('--warmup_size', type=int, default=2,
                         help='Integer Value - The upper bound of warm-up')
@@ -78,13 +78,12 @@ def train(model_name, log_dir, negative_dir, isic_csv, batch_size, val_split, wa
                                            transform=TransformTrain(input_size, crop_scale=(0.3, 1.0),
                                                                     use_random_shrink=True))
     dataset_positive_val = FileDetection(files=val_files_p, labels=val_labels_p,
-                                         transform=TransformTrain(input_size, crop_scale=(0.3, 1.0),
-                                                                    use_random_shrink=True))
+                                         transform=TransformTest(input_size))
 
     dataset_negative_train = FileDetection(files=train_files_n, labels=None,
                                            transform=TransformTrain(input_size))
     dataset_negative_val = FileDetection(files=val_files_n, labels=None,
-                                         transform=TransformTrain(input_size))
+                                         transform=TransformTest(input_size))
 
     # CREATE THE DATALOADERS
     dataloader_positive_train = torch.utils.data.DataLoader(dataset=dataset_positive_train, shuffle=True,
