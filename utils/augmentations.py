@@ -537,25 +537,23 @@ class RandomShrinkWithBB(torch.nn.Module):
 
 
 class TransformTrain(object):
-    def __init__(self, size=416, crop_scale=(0.08, 1.0), use_random_shrink=False):
+    def __init__(self, size=416, crop_scale=(0.08, 1.0), random_shrink_ratio=1):
         self.size = size
-        self.use_random_shrink = use_random_shrink
         self.augment_1 = transforms.Compose([
             CenterFullCrop(),
             transforms.RandomResizedCrop(size, crop_scale),
             transforms.RandomHorizontalFlip(),
             transforms.RandomVerticalFlip(),
-            # transforms.ColorJitter(brightness=32. / 255., saturation=0.5),
+            transforms.ColorJitter(brightness=32. / 255., saturation=0.5),
         ])
-        self.augment_2 = RandomShrinkWithBB(1 / 16)
+        self.augment_2 = RandomShrinkWithBB(random_shrink_ratio)
         self.augment_3 = transforms.Compose([
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])])
 
     def __call__(self, img, bbox):
         img = self.augment_1(img)
-        if self.use_random_shrink:
-            img, bbox = self.augment_2(img, bbox)
+        img, bbox = self.augment_2(img, bbox)
         img = self.augment_3(img)
         return img, bbox
 
