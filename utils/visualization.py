@@ -5,18 +5,17 @@ import torch
 
 transform = transforms.ToPILImage(mode='RGB')
 
-def denormalize(image, mean, std):
-    image *= std
-    image += mean
-    image *= 255
-    return image
 
-
-def viz_annotation(image, box, save_to, image_mean=[0.5, 0.5, 0.5], image_std=[0.5, 0.5, 0.5], target = None):
+def torch_to_pil(image, image_mean=[0.5, 0.5, 0.5], image_std=[0.5, 0.5, 0.5]):
     image = image.detach().cpu()
     image = image * torch.tensor(image_std).view(3, 1, 1)
     image = image + torch.tensor(image_mean).view(3, 1, 1)
     image = transform(image)
+    return image
+
+
+def viz_annotation(image, box, save_to, image_mean=[0.5, 0.5, 0.5], image_std=[0.5, 0.5, 0.5], target = None):
+    image = torch_to_pil(image, image_mean, image_std)
 
     #image = image.detach().cpu().numpy()
     #image = np.swapaxes(image, 0, 2)

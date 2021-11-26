@@ -6,29 +6,27 @@ import argparse
 import torch
 import torch.optim as optim
 from data.custom import FileDetection
-from data import BaseTransform, detection_collate
+from data import detection_collate
 import tools
 from utils.augmentations import TransformTrain, TransformTest
 from utils.modules import ModelEMA
 import pandas as pd
 import models
 import data.utils
-import utils.training
 from tqdm import tqdm
-from utils.com_paras_flops import FLOPs_and_Params
 from test import test
-
+from torch.optim.lr_scheduler import StepLR
 
 def parseargs():
     parser = argparse.ArgumentParser(description='YOLO Detection')
     # basic
     parser.add_argument('--batch_size', default=1, type=int,
                         help='Integer Value - Batch size (must be divisible by 2)')
-    parser.add_argument('--base_lr', default=1e-3, type=float,
+    parser.add_argument('--base_lr', default=1e-4, type=float,
                         help='Integer Value - initial learning rate')
     parser.add_argument('--min_lr', default=1e-6, type=float,
                         help='Integer Value - minimum learning rate')
-    parser.add_argument('--lr_decay_step', default=10, type=float,
+    parser.add_argument('--lr_decay_step', default=5, type=float,
                         help='Integer Value - Number of epoch after which the learning rate is decayed.')
     parser.add_argument('--warmup_size', type=int, default=2,
                         help='Integer Value - The upper bound of warm-up')
@@ -124,12 +122,13 @@ def train(model_name, log_dir, negative_dir, isic_csv, batch_size, val_split, wa
                           weight_decay=5e-4
                           )
 
-    lr_scheduler = utils.training.StepLRWithWarmUP(optimizer,
-                                                   warmup_size=warmup_size * epoch_size_train,
-                                                   step_size=lr_decay_step * epoch_size_train,
-                                                   min_lr=min_lr,
-                                                   gamma=0.1
-                                                   )
+    #lr_scheduler = utils.training.StepLRWithWarmUP(optimizer,
+    #                                               warmup_size=warmup_size * epoch_size_train,
+    #                                               step_size=lr_decay_step * epoch_size_train,
+    #                                               min_lr=min_lr,
+    #                                               gamma=0.1
+    #                                               )
+    lr_scheduler = StepLR(optimizer, step_size=lr_decay_step)
 
     # EMA... whatever it means...
     ema = ModelEMA(model)
@@ -151,7 +150,6 @@ def train(model_name, log_dir, negative_dir, isic_csv, batch_size, val_split, wa
         for iter_i, ((images_p, targets_p), (images_n, targets_n)) in enumerate(p_bar):
             #if iter_i == 10:
             #    break
-            lr_scheduler.step()
             images = torch.cat([images_p, images_n])
             targets = targets_p + targets_n
             targets = [label.tolist() for label in targets]
@@ -205,6 +203,7 @@ def train(model_name, log_dir, negative_dir, isic_csv, batch_size, val_split, wa
                                '], LR': lr_scheduler.get_lr(),
                                'size': f"{input_size}"})
 
+        lr_scheduler.step()
         # VALIDATE AFTER EPOCH
 
         model.set_grid(yolo_net_cfg['size'])
