@@ -27,7 +27,7 @@ class FileDetection(data.Dataset):
 
     def __getitem__(self, index):
         # load an image
-        img = Image.open(self.files[index])
+        img = Image.open(self.files[index]).convert("RGB")
         # create a bounding box for a positive image (that has a label)
         if self.labels is None:
             target = [[0.0, 0.0, 0.0, 0.0, 0]]

@@ -67,7 +67,7 @@ def main(model_name, model_file, dataset_csv, log_dir, num_workers):
 
     # CREATE THE DATALOADERS
     dataset = FileDetection(files=test_files_p, labels=test_labels_p,
-                            transform=TransformTest)
+                            transform=TransformTest(input_size))
     data_loader = torch.utils.data.DataLoader(dataset=dataset,
                                               shuffle=False,
                                               batch_size=1,
@@ -88,3 +88,10 @@ def main(model_name, model_file, dataset_csv, log_dir, num_workers):
 if __name__ == '__main__':
     args = parseargs()
     main(**args.__dict__)
+
+
+
+
+
+
+

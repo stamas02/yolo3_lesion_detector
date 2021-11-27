@@ -9,7 +9,8 @@ import data.utils
 from tqdm import tqdm
 from utils.visualization import torch_to_pil
 import numpy as np
-
+import shutil
+import pandas as pd
 
 
 def parseargs():
@@ -44,6 +45,8 @@ def crop_dataset(model, device, data_loader, src_dir, dst_dir):
     model.eval()
 
     p_bar = tqdm(data_loader, total=len(data_loader), desc=f"Testing")
+    best_scores = []
+
     for iter_i, (image, _) in enumerate(p_bar):
 
         # TO DEVICE
@@ -51,6 +54,7 @@ def crop_dataset(model, device, data_loader, src_dir, dst_dir):
         # FORWARD PASS
         bboxes, scores, cls_inds = model(image)
         best_bb_ind = np.argmax(scores)
+        best_scores.append(scores[best_bb_ind])
         bbox = bboxes[best_bb_ind]
         output_filename = dst_dir+data_loader.dataset.files[iter_i][len(src_dir)::]
 
@@ -60,8 +64,11 @@ def crop_dataset(model, device, data_loader, src_dir, dst_dir):
         os.makedirs(os.path.dirname(output_filename), exist_ok=True)
         cropped_image.save(output_filename)
 
+    return best_scores
 
 def main(model_name, model_file, dataset_csv, dst_dir, num_workers):
+    shutil.copyfile(dataset_csv, os.path.join(dst_dir,os.path.basename(dataset_csv)))
+
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
     yolo_net = models.model_dict[model_name]
@@ -89,7 +96,13 @@ def main(model_name, model_file, dataset_csv, dst_dir, num_workers):
     #model.load_state_dict(torch.load(model_file))
     src_dir = dataset_csv.split(".")[0]+"/"
     dst_dir = os.path.join(dst_dir,os.path.basename(os.path.dirname(src_dir))+"/")
-    crop_dataset(model, device, data_loader, src_dir, dst_dir)
+    scores = crop_dataset(model, device, data_loader, src_dir, dst_dir)
+
+
+    df = pd.DataFrame({'image': [f[len(src_dir)::].split(".")[0] for f in data_loader.dataset.files],
+                       'confidence': scores})
+    df.to_csv(os.path.dirname(os.path.dirname(dst_dir))+"/confidence.csv",  index=False)
+
 
 
 if __name__ == '__main__':
