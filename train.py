@@ -16,6 +16,8 @@ import data.utils
 from tqdm import tqdm
 from test import test
 from torch.optim.lr_scheduler import StepLR
+import torchvision
+
 
 def parseargs():
     parser = argparse.ArgumentParser(description='YOLO Detection')
@@ -72,6 +74,9 @@ def train(model_name, log_dir, negative_dir, isic_csv, batch_size, val_split, wa
     train_files_n, _, val_files_n = data.utils.get_directory(negative_dir, 0, val_split)
     train_files_p, train_labels_p, _, _, val_files_p, val_labels_p = data.utils.get_isic(isic_csv, 0, val_split)
 
+
+
+
     dataset_positive_train = FileDetection(files=train_files_p, labels=train_labels_p,
                                            transform=TransformTrain(input_size, crop_scale=(0.9, 1.0),
                                                                     random_shrink_ratio=1/16))
@@ -83,6 +88,12 @@ def train(model_name, log_dir, negative_dir, isic_csv, batch_size, val_split, wa
                                                                     random_shrink_ratio=0.95))
     dataset_negative_val = FileDetection(files=val_files_n, labels=None,
                                          transform=TransformTest(input_size))
+
+    dataset_negative2_train = torchvision.datasets.CIFAR10(root='cifar/', train=True, download=True,
+                            transform=TransformTrain(input_size, crop_scale=(1.0, 1.0), random_shrink_ratio=1.0))
+
+    dataset_negative2_val = torchvision.datasets.CIFAR10(root='cifar/', train=False, download=True,
+                            transform=TransformTest(input_size))
 
     # CREATE THE DATALOADERS
     dataloader_positive_train = torch.utils.data.DataLoader(dataset=dataset_positive_train, shuffle=True,
@@ -101,6 +112,13 @@ def train(model_name, log_dir, negative_dir, isic_csv, batch_size, val_split, wa
                                                           batch_size=batch_size,
                                                           collate_fn=detection_collate,
                                                           num_workers=num_workers, pin_memory=True)
+    dataloader_negative2_train = torch.utils.data.DataLoader(dataset=dataset_negative2_train, shuffle=True,
+                                                            batch_size=batch_size,
+                                                            num_workers=num_workers, pin_memory=True)
+    dataloader_negative2_val = torch.utils.data.DataLoader(dataset=dataset_negative2_val, shuffle=False,
+                                                          batch_size=batch_size,
+                                                          num_workers=num_workers, pin_memory=True)
+
 
     epoch_size_train = min(len(dataset_positive_train), len(dataset_negative_train)) // batch_size
     epoch_size_val = min(len(dataset_positive_val), len(dataset_negative_val)) // batch_size
@@ -137,21 +155,21 @@ def train(model_name, log_dir, negative_dir, isic_csv, batch_size, val_split, wa
     best_model_file = os.path.join(log_dir, 'best_model.pth')
     df_train = pd.DataFrame()
     df_val = pd.DataFrame()
-
     for epoch in range(0, yolo_net_cfg["max_epoch"]):
         conf_loss = cls_loss = box_loss = iou_loss = total_loss = 0
-        p_bar = tqdm(zip(dataloader_positive_train, dataloader_negative_train),
+        p_bar = tqdm(zip(dataloader_positive_train, dataloader_negative_train, dataloader_negative2_train),
                      total=epoch_size_train,
                      desc=f"Training epoch {epoch}")
 
         # TRAIN FOR AN EPOCH
         model.set_grid(input_size)
         model.train()
-        for iter_i, ((images_p, targets_p), (images_n, targets_n)) in enumerate(p_bar):
+
+        for iter_i, ((images_p, targets_p), (images_n, targets_n), (images_n2, _)) in enumerate(p_bar):
             #if iter_i == 10:
             #    break
-            images = torch.cat([images_p, images_n])
-            targets = targets_p + targets_n
+            images = torch.cat([images_p, images_n, images_n2])
+            targets = targets_p + targets_n + targets_n
             targets = [label.tolist() for label in targets]
             # multi-scale trick
             if iter_i % 10:

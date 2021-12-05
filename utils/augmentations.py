@@ -508,7 +508,7 @@ class RandomShrinkWithBB(torch.nn.Module):
         """
         self.ratio = ratio
 
-    def __call__(self, img, bboxes):
+    def __call__(self, img, bboxes = None):
         """
 
         Args:
@@ -524,14 +524,15 @@ class RandomShrinkWithBB(torch.nn.Module):
         shrink_ratio = random.uniform(self.ratio, 1)
         shrinked_width, shrinked_height = (int(shrink_ratio * width), int(shrink_ratio * height))
         shrinked_img = img.resize((shrinked_width, shrinked_height))
-        left_pos = random.randint(0, width - shrinked_width)
-        top_pos = random.randint(0, height - shrinked_height)
+        left_pos = random.randint(0, width - shrinked_width) if width - shrinked_width > 0 else 0
+        top_pos = random.randint(0, height - shrinked_height) if height - shrinked_height > 0 else 0
         new_img.paste(shrinked_img, (left_pos, top_pos))
-        for i, bbox in enumerate(bboxes):
-            bboxes[i][0] = ((bboxes[i][0] * shrinked_width) + left_pos) / width
-            bboxes[i][1] = ((bboxes[i][1] * shrinked_height) + top_pos) / height
-            bboxes[i][2] = ((bboxes[i][2] * shrinked_width) + left_pos) / width
-            bboxes[i][3] = ((bboxes[i][3] * shrinked_height) + top_pos) / height
+        if bboxes is not None:
+            for i, bbox in enumerate(bboxes):
+                bboxes[i][0] = ((bboxes[i][0] * shrinked_width) + left_pos) / width
+                bboxes[i][1] = ((bboxes[i][1] * shrinked_height) + top_pos) / height
+                bboxes[i][2] = ((bboxes[i][2] * shrinked_width) + left_pos) / width
+                bboxes[i][3] = ((bboxes[i][3] * shrinked_height) + top_pos) / height
 
         return new_img, bboxes
 
@@ -551,11 +552,11 @@ class TransformTrain(object):
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])])
 
-    def __call__(self, img, bbox):
+    def __call__(self, img, bbox = None):
         img = self.augment_1(img)
         img, bbox = self.augment_2(img, bbox)
         img = self.augment_3(img)
-        return img, bbox
+        return (img, bbox) if bbox is not None else img
 
 
 class TransformTest(object):
@@ -569,4 +570,4 @@ class TransformTest(object):
         ])
 
     def __call__(self, img, bbox=None):
-        return self.augment(img), bbox if bbox is not None else self.augment(img)
+        return (self.augment(img), bbox) if bbox is not None else self.augment(img)
