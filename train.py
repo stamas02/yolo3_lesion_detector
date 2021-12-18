@@ -17,6 +17,8 @@ from tqdm import tqdm
 from test import test
 from torch.optim.lr_scheduler import StepLR
 import torchvision
+from configparser import ConfigParser
+
 
 
 def parseargs():
@@ -30,8 +32,6 @@ def parseargs():
                         help='Integer Value - minimum learning rate')
     parser.add_argument('--lr_decay_step', default=5, type=float,
                         help='Integer Value - Number of epoch after which the learning rate is decayed.')
-    parser.add_argument('--warmup_size', type=int, default=2,
-                        help='Integer Value - The upper bound of warm-up')
     parser.add_argument('--num_workers', default=1, type=int,
                         help='String Value - Number of workers used in dataloading')
     parser.add_argument('--log_dir', default='log/', type=str,
@@ -40,15 +40,6 @@ def parseargs():
     parser.add_argument('--model_name', default='yolo_v2',
                         help='String Value - yolov2_d19, yolov2_r50, yolov2_slim, yolov3, yolov3_spp, yolov3_tiny')
 
-    # dataset
-    parser.add_argument("--isic_csv", "-p",
-                        type=str,
-                        help='String Value - The path to the ISIC dataset csv file.',
-                        )
-    parser.add_argument("--negative_dir", "-n",
-                        type=str,
-                        help='String Value - The path to the folder containing only negative examples i.e. healthy skin.',
-                        )
     parser.add_argument("--val-split", type=float,
                         default=0.05,
                         help="Floating Point Value - The percentage of data to be used for validation.")
@@ -56,7 +47,46 @@ def parseargs():
     return parser.parse_args()
 
 
-def train(model_name, log_dir, negative_dir, isic_csv, batch_size, val_split, warmup_size, lr_decay_step,
+def get_dataloaders(cfg, val_split, input_size, batch_size,num_workers):
+    config_parser = ConfigParser(os.environ)
+    config_parser.read(cfg)
+    train_loaders = []
+    val_loaders = []
+    for section in config_parser.sections():
+        _get_data = data.utils.get_isic \
+            if os.path.basename(config_parser[section]["dataset"]) == "ISIC_2019_Training_GroundTruth.csv"\
+            else data.utils.get_directory
+        train_files, train_labels, _, _, val_files, val_labels = \
+            _get_data(config_parser[section]["dataset"], 0, val_split)
+
+        transform = TransformTrain(input_size,
+                                   crop_scale=config_parser.getfloat(section, "crop_scale"),
+                                   random_shrink_ratio=config_parser.getfloat(section, "random_shrink_ratio"),
+                                   random_brightness=config_parser.getfloat(section, "random_brightness"),
+                                   random_contrast=config_parser.getfloat(section, "random_contrast"),
+                                   random_saturation=config_parser.getfloat(section, "random_saturation"),
+                                   random_hue=config_parser.getfloat(section, "random_hue")
+                                   )
+        dataset_positive_train = FileDetection(name = section,files=train_files, labels=train_labels,
+                                               transform=transform)
+
+        dataset_positive_val = FileDetection(name = section, files=val_files, labels=val_labels,
+                                             transform=TransformTest(input_size))
+        dataloaders = []
+        for i, dataset in enumerate([dataset_positive_train, dataset_positive_val]):
+            dataloaders.append(torch.utils.data.DataLoader(dataset=dataset, shuffle=i==0,
+                                                                    batch_size=batch_size,
+                                                                    collate_fn=detection_collate,
+                                                                    num_workers=num_workers,
+                                                                    pin_memory=True))
+        train_loader, val_loader = dataloaders
+        train_loaders.append(train_loader)
+        val_loaders.append(val_loader)
+
+    return train_loaders, val_loaders
+
+
+def train(model_name, log_dir, batch_size, val_split, lr_decay_step,
           base_lr, min_lr, num_workers):
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     print('Model: ', model_name)
@@ -69,59 +99,12 @@ def train(model_name, log_dir, negative_dir, isic_csv, batch_size, val_split, wa
     os.makedirs(log_dir, exist_ok=True)
 
     # GET DATASETS
-
     input_size = yolo_net_cfg["size"]
-    train_files_n, _, val_files_n = data.utils.get_directory(negative_dir, 0, val_split)
-    train_files_p, train_labels_p, _, _, val_files_p, val_labels_p = data.utils.get_isic(isic_csv, 0, val_split)
+    train_loaders, val_loaders = get_dataloaders("config_datasets.ini",val_split, input_size, batch_size, num_workers)
 
 
-
-
-    dataset_positive_train = FileDetection(files=train_files_p, labels=train_labels_p,
-                                           transform=TransformTrain(input_size, crop_scale=(0.98, 1.0),
-                                                                    random_shrink_ratio=1/5))
-    dataset_positive_val = FileDetection(files=val_files_p, labels=val_labels_p,
-                                         transform=TransformTest(input_size))
-
-    dataset_negative_train = FileDetection(files=train_files_n, labels=None,
-                                           transform=TransformTrain(input_size, crop_scale=(0.5, 1.0),
-                                                                    random_shrink_ratio=1.0))
-    dataset_negative_val = FileDetection(files=val_files_n, labels=None,
-                                         transform=TransformTest(input_size))
-
-    dataset_negative2_train = torchvision.datasets.CIFAR10(root='cifar/', train=True, download=True,
-                            transform=TransformTrain(input_size, crop_scale=(1.0, 1.0), random_shrink_ratio=1.0))
-
-    dataset_negative2_val = torchvision.datasets.CIFAR10(root='cifar/', train=False, download=True,
-                            transform=TransformTest(input_size))
-
-    # CREATE THE DATALOADERS
-    dataloader_positive_train = torch.utils.data.DataLoader(dataset=dataset_positive_train, shuffle=True,
-                                                            batch_size=batch_size,
-                                                            collate_fn=detection_collate,
-                                                            num_workers=num_workers, pin_memory=True)
-    dataloader_positive_val = torch.utils.data.DataLoader(dataset=dataset_positive_val, shuffle=False,
-                                                          batch_size=batch_size,
-                                                          collate_fn=detection_collate,
-                                                          num_workers=num_workers, pin_memory=True)
-    dataloader_negative_train = torch.utils.data.DataLoader(dataset=dataset_negative_train, shuffle=True,
-                                                            batch_size=batch_size,
-                                                            collate_fn=detection_collate,
-                                                            num_workers=num_workers, pin_memory=True)
-    dataloader_negative_val = torch.utils.data.DataLoader(dataset=dataset_negative_val, shuffle=False,
-                                                          batch_size=batch_size,
-                                                          collate_fn=detection_collate,
-                                                          num_workers=num_workers, pin_memory=True)
-    dataloader_negative2_train = torch.utils.data.DataLoader(dataset=dataset_negative2_train, shuffle=True,
-                                                            batch_size=batch_size,
-                                                            num_workers=num_workers, pin_memory=True)
-    dataloader_negative2_val = torch.utils.data.DataLoader(dataset=dataset_negative2_val, shuffle=False,
-                                                          batch_size=batch_size,
-                                                          num_workers=num_workers, pin_memory=True)
-
-
-    epoch_size_train = min(len(dataset_positive_train), len(dataset_negative_train)) // batch_size
-    epoch_size_val = min(len(dataset_positive_val), len(dataset_negative_val)) // batch_size
+    epoch_size_train = min([len(loader.dataset) for loader in train_loaders]) // batch_size
+    epoch_size_val = min([len(loader.dataset) for loader in val_loaders]) // batch_size
     # BUILD THE MODEL
     model = yolo_net(device=device,
                      input_size=yolo_net_cfg['size'],
@@ -140,7 +123,7 @@ def train(model_name, log_dir, negative_dir, isic_csv, batch_size, val_split, wa
                           weight_decay=5e-4
                           )
 
-    #lr_scheduler = utils.training.StepLRWithWarmUP(optimizer,
+    # lr_scheduler = utils.training.StepLRWithWarmUP(optimizer,
     #                                               warmup_size=warmup_size * epoch_size_train,
     #                                               step_size=lr_decay_step * epoch_size_train,
     #                                               min_lr=min_lr,
@@ -157,7 +140,7 @@ def train(model_name, log_dir, negative_dir, isic_csv, batch_size, val_split, wa
     df_val = pd.DataFrame()
     for epoch in range(0, yolo_net_cfg["max_epoch"]):
         conf_loss = cls_loss = box_loss = iou_loss = total_loss = 0
-        p_bar = tqdm(zip(dataloader_positive_train, dataloader_negative_train, dataloader_negative2_train),
+        p_bar = tqdm(zip(*train_loaders),
                      total=epoch_size_train,
                      desc=f"Training epoch {epoch}")
 
@@ -165,13 +148,12 @@ def train(model_name, log_dir, negative_dir, isic_csv, batch_size, val_split, wa
         model.set_grid(input_size)
         model.train()
 
-        for iter_i, ((images_p, targets_p), (images_n, targets_n), (images_n2, _)) in enumerate(p_bar):
-            #if iter_i == 10:
+        for iter_i, image_target_list in enumerate(p_bar):
+            # if iter_i == 10:
             #    break
-            images_n2 = images_n2[0:len(images_n)]
-            images = torch.cat([images_p, images_n, images_n2])
-            targets = targets_p + targets_n + targets_n
-            targets = [label.tolist() for label in targets]
+            images = torch.cat([image_target_pair[0] for image_target_pair in image_target_list])
+            targets = [target for image_target_pair in image_target_list for target in image_target_pair[1]]
+
             # multi-scale trick
             if iter_i % 10:
                 # randomly choose a new size
@@ -214,11 +196,11 @@ def train(model_name, log_dir, negative_dir, isic_csv, batch_size, val_split, wa
             ema.update(model)
 
             # DISPLAY TRAINING INFO
-            p_bar.set_postfix({'[Losses -> total': f"{total_loss/(iter_i+1):.3f}",
-                               'conf': f"{conf_loss/(iter_i+1):.3f}",
-                               'cls': f"{cls_loss/(iter_i+1):.3f}",
-                               'box': f"{box_loss/(iter_i+1):.3f}",
-                               'iou': f"{iou_loss/(iter_i+1):.3f}",
+            p_bar.set_postfix({'[Losses -> total': f"{total_loss / (iter_i + 1):.3f}",
+                               'conf': f"{conf_loss / (iter_i + 1):.3f}",
+                               'cls': f"{cls_loss / (iter_i + 1):.3f}",
+                               'box': f"{box_loss / (iter_i + 1):.3f}",
+                               'iou': f"{iou_loss / (iter_i + 1):.3f}",
                                '], LR': lr_scheduler.get_lr(),
                                'size': f"{input_size}"})
 
@@ -233,17 +215,15 @@ def train(model_name, log_dir, negative_dir, isic_csv, batch_size, val_split, wa
                                     'box loss': box_loss / epoch_size_train,
                                     'iou loss': iou_loss / epoch_size_train}, ignore_index=True)
 
-        p_bar = tqdm(zip(dataloader_positive_val,dataloader_negative_val),
+        p_bar = tqdm(zip(*val_loaders),
                      total=epoch_size_val,
                      desc=f"Validating after epoch {epoch}")
         # VALIDATE
         conf_loss = cls_loss = box_loss = iou_loss = total_loss = 0
         with torch.no_grad():
-            for iter_i, ((images_p, targets_p), (images_n, targets_n)) in enumerate(p_bar):
-                #if iter_i == 10:
-                #    break
-                images = torch.cat([images_p, images_n])
-                targets = targets_p + targets_n
+            for iter_i, image_target_pair in enumerate(p_bar):
+                images = torch.cat([image_target_pair[0] for image_target_pair in image_target_list])
+                targets = [target for image_target_pair in image_target_list for target in image_target_pair[1]]
 
                 targets = [label.tolist() for label in targets]
                 # Convert the one hot target representation to yolo target.
@@ -267,11 +247,11 @@ def train(model_name, log_dir, negative_dir, isic_csv, batch_size, val_split, wa
                 total_loss = conf_loss + cls_loss + box_loss + iou_loss
 
                 # DISPLAY VALIDATION INFO
-                p_bar.set_postfix({'[Losses -> total': f"{total_loss/(iter_i+1):.3f}",
-                                   'conf': f"{conf_loss/(iter_i+1):.3f}",
-                                   'cls': f"{cls_loss/(iter_i+1):.3f}",
-                                   'box_loss': f"{box_loss/(iter_i+1):.3f}",
-                                   'iou_loss': f"{iou_loss/(iter_i+1):.3f}",
+                p_bar.set_postfix({'[Losses -> total': f"{total_loss / (iter_i + 1):.3f}",
+                                   'conf': f"{conf_loss / (iter_i + 1):.3f}",
+                                   'cls': f"{cls_loss / (iter_i + 1):.3f}",
+                                   'box_loss': f"{box_loss / (iter_i + 1):.3f}",
+                                   'iou_loss': f"{iou_loss / (iter_i + 1):.3f}",
                                    '], size': f"{yolo_net_cfg['size']}"})
 
             df_val = df_val.append({'total loss': total_loss / epoch_size_val,

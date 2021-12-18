@@ -8,7 +8,7 @@ def get_directory(negative_dir, test_split, val_split):
     result = [y for x in os.walk(negative_dir) for y in glob(os.path.join(x[0], '*.jpg'))]
     df = pd.DataFrame({"images": result})
     train_df, test_df, val_df = slit_data(df, test_split, val_split)
-    return train_df["images"].tolist(), test_df["images"].tolist(), val_df["images"].tolist()
+    return train_df["images"].tolist(), None, test_df["images"].tolist(), None, val_df["images"].tolist(), None
 
 
 def get_isic(isic_csv, test_split, val_split):

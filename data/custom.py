@@ -18,9 +18,11 @@ class FileDetection(data.Dataset):
     """
 
     def __init__(self,
+                 name = "Default",
                  files = None,
                  labels = None,
                  transform=None):
+        self.name = name
         self.files = files
         self.labels = labels
         self.transform = transform

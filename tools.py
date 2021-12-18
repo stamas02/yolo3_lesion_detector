@@ -1,7 +1,7 @@
-import numpy as np
+
 from data import *
 import torch.nn as nn
-import torch.nn.functional as F
+
 
 # We use ignore thresh to decide which anchor box can be kept.
 ignore_thresh = 0.5
