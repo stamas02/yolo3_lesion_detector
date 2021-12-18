@@ -69,6 +69,6 @@ yolov3_tiny_cfg = {
     'anchor_size': [[10, 10], [30, 30], [60, 60],
                     [100, 100], [150, 150], [200, 200]],
     # train
-    'max_epoch': 50,
+    'max_epoch': 10,
     'ignore_thresh': 0.5
 }

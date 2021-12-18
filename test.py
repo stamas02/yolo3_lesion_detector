@@ -81,7 +81,7 @@ def main(model_name, model_file, dataset_csv, log_dir, num_workers):
                      trainable=False,
                      anchor_size=yolo_net_cfg['anchor_size'],
                      hr=False)
-    #model.load_state_dict(torch.load(model_file))
+    model.load_state_dict(torch.load(model_file))
     test(model, device, data_loader, log_dir)
 
 

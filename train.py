@@ -78,14 +78,14 @@ def train(model_name, log_dir, negative_dir, isic_csv, batch_size, val_split, wa
 
 
     dataset_positive_train = FileDetection(files=train_files_p, labels=train_labels_p,
-                                           transform=TransformTrain(input_size, crop_scale=(0.9, 1.0),
-                                                                    random_shrink_ratio=1/16))
+                                           transform=TransformTrain(input_size, crop_scale=(0.98, 1.0),
+                                                                    random_shrink_ratio=1/5))
     dataset_positive_val = FileDetection(files=val_files_p, labels=val_labels_p,
                                          transform=TransformTest(input_size))
 
     dataset_negative_train = FileDetection(files=train_files_n, labels=None,
-                                           transform=TransformTrain(input_size, crop_scale=(0.08, 1.0),
-                                                                    random_shrink_ratio=0.95))
+                                           transform=TransformTrain(input_size, crop_scale=(0.5, 1.0),
+                                                                    random_shrink_ratio=1.0))
     dataset_negative_val = FileDetection(files=val_files_n, labels=None,
                                          transform=TransformTest(input_size))
 
@@ -168,6 +168,7 @@ def train(model_name, log_dir, negative_dir, isic_csv, batch_size, val_split, wa
         for iter_i, ((images_p, targets_p), (images_n, targets_n), (images_n2, _)) in enumerate(p_bar):
             #if iter_i == 10:
             #    break
+            images_n2 = images_n2[0:len(images_n)]
             images = torch.cat([images_p, images_n, images_n2])
             targets = targets_p + targets_n + targets_n
             targets = [label.tolist() for label in targets]

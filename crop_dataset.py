@@ -93,7 +93,7 @@ def main(model_name, model_file, dataset_csv, dst_dir, num_workers):
                      trainable=False,
                      anchor_size=yolo_net_cfg['anchor_size'],
                      hr=False)
-    #model.load_state_dict(torch.load(model_file))
+    model.load_state_dict(torch.load(model_file))
     src_dir = dataset_csv.split(".")[0]+"/"
     dst_dir = os.path.join(dst_dir,os.path.basename(os.path.dirname(src_dir))+"/")
     scores = crop_dataset(model, device, data_loader, src_dir, dst_dir)

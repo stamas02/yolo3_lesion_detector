@@ -544,11 +544,12 @@ class TransformTrain(object):
             CenterFullCrop(),
             transforms.RandomResizedCrop(size, crop_scale),
             transforms.RandomHorizontalFlip(),
-            transforms.RandomVerticalFlip(),
-            transforms.ColorJitter(brightness=32. / 255., saturation=0.5),
+            transforms.RandomVerticalFlip()
         ])
         self.augment_2 = RandomShrinkWithBB(random_shrink_ratio)
         self.augment_3 = transforms.Compose([
+            #transforms.ColorJitter(brightness=32. / 255., saturation=0.5),
+            transforms.ColorJitter(brightness=0.2, contrast = 0.2, saturation=0.5, hue=0.3),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])])
 
