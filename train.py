@@ -138,6 +138,9 @@ def train(model_name, log_dir, batch_size, val_split, lr_decay_step,
     best_model_file = os.path.join(log_dir, 'best_model.pth')
     df_train = pd.DataFrame()
     df_val = pd.DataFrame()
+
+
+
     for epoch in range(0, yolo_net_cfg["max_epoch"]):
         conf_loss = cls_loss = box_loss = iou_loss = total_loss = 0
         p_bar = tqdm(zip(*train_loaders),
@@ -268,8 +271,9 @@ def train(model_name, log_dir, batch_size, val_split, lr_decay_step,
     df_val.to_csv(os.path.join(log_dir, 'val_log.csv'))
     model.load_state_dict(torch.load(os.path.join(log_dir, 'best_model.pth')))
     model.eval()
-    test(model, device, dataloader_positive_val, log_dir=os.path.join(log_dir, "positive_val/"))
-    test(model, device, dataloader_negative_val, log_dir=os.path.join(log_dir, "negative_val/"))
+
+    for data_loader in val_loaders:
+        test(model, device, data_loader, log_dir=os.path.join(log_dir, data_loader.dataset.name+"_val/"))
 
 
 if __name__ == '__main__':
